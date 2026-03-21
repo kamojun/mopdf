@@ -441,7 +441,7 @@ class TocPanel(QWidget):
         tree = QTreeWidget()
 
         def keyPressEvent(event):
-            if event.modifiers() == Qt.KeyboardModifier.ShiftModifier:
+            if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
                 key = event.key()
                 if key == Qt.Key.Key_Up:
                     self._move_up(); return

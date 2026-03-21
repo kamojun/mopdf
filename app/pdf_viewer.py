@@ -1,7 +1,7 @@
 from __future__ import annotations
 from typing import Optional
 from PySide6.QtCore import Qt, Signal, QTimer, QRect, QPoint
-from PySide6.QtGui import QPixmap, QImage, QPainter, QColor, QPen, QCursor
+from PySide6.QtGui import QPixmap, QImage, QPainter, QColor, QPen, QCursor, QFont
 from PySide6.QtWidgets import (
     QScrollArea, QWidget, QVBoxLayout, QLabel, QSizePolicy, QFrame, QRubberBand
 )
@@ -37,6 +37,31 @@ class PageWidget(QLabel):
     def set_select_mode(self, enabled: bool) -> None:
         self._select_mode = enabled
         self.setCursor(QCursor(Qt.CursorShape.CrossCursor if enabled else Qt.CursorShape.ArrowCursor))
+
+    def paintEvent(self, event) -> None:
+        super().paintEvent(event)
+        if self._doc is None or self.pixmap() is None or self.pixmap().isNull():
+            return
+        label = self._doc.get_page_label_for(self.page_index)
+        if not label:
+            return
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
+        font = QFont()
+        font.setPointSize(11)
+        font.setBold(True)
+        painter.setFont(font)
+        fm = painter.fontMetrics()
+        padding = 5
+        text_rect = fm.boundingRect(label)
+        bg_w = text_rect.width() + padding * 2
+        bg_h = text_rect.height() + padding * 2
+        bg_x = (self.width() - bg_w) // 2
+        bg_y = self.height() - bg_h - 14
+        painter.fillRect(bg_x, bg_y, bg_w, bg_h, QColor(0, 0, 0, 150))
+        painter.setPen(QColor(255, 255, 255))
+        painter.drawText(bg_x, bg_y, bg_w, bg_h, Qt.AlignmentFlag.AlignCenter, label)
+        painter.end()
 
     def mousePressEvent(self, event) -> None:
         if self._select_mode and event.button() == Qt.MouseButton.LeftButton:

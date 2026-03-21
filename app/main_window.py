@@ -70,6 +70,8 @@ class MainWindow(QMainWindow):
         self._toc_panel.page_jump_requested.connect(self._viewer.scroll_to_page)
         # 目次編集 → 未保存フラグ
         self._toc_panel.toc_modified.connect(self._mark_unsaved)
+        # ページラベル編集 → 未保存フラグ
+        self._page_label_panel.page_labels_modified.connect(self._mark_unsaved)
 
         # ビューアのページ変更 → TocPanel に現在ページを通知
         self._viewer.page_changed.connect(self._toc_panel.set_current_page)
@@ -153,6 +155,8 @@ class MainWindow(QMainWindow):
             return
         toc = self._toc_panel.get_toc()
         self._doc.set_toc(toc)
+        labels = self._page_label_panel.get_page_labels()
+        self._doc.set_page_labels(labels)
         try:
             self._doc.save()
         except Exception as e:
@@ -171,6 +175,8 @@ class MainWindow(QMainWindow):
             return
         toc = self._toc_panel.get_toc()
         self._doc.set_toc(toc)
+        labels = self._page_label_panel.get_page_labels()
+        self._doc.set_page_labels(labels)
         try:
             self._doc.save(path)
         except Exception as e:

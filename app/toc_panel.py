@@ -45,11 +45,15 @@ class TocPanel(QWidget):
     page_jump_requested = Signal(int)   # 0-indexed 物理ページ番号
     toc_modified = Signal()             # 編集が行われたとき
 
+    _MAX_HISTORY = 50
+
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self._doc: Optional[PdfDocument] = None
         self._current_page: int = 0     # MainWindowから更新される
         self._pending_item: Optional[QTreeWidgetItem] = None  # 追加直後・未確定のアイテム
+        self._history: list[list[TocEntry]] = []
+        self._staged_snapshot: Optional[list[TocEntry]] = None  # _add_entry用
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -165,18 +169,14 @@ class TocPanel(QWidget):
     # ------------------------------------------------------------------
 
     def _rebuild(self) -> None:
+        self._history.clear()
+        self._staged_snapshot = None
+        entries = self._doc.get_toc() if self._doc else []
+        self._build_tree_from_entries(entries)
+
+    def _build_tree_from_entries(self, entries: list[TocEntry]) -> None:
         self._tree.blockSignals(True)
         self._tree.clear()
-        if self._doc is None:
-            self._tree.blockSignals(False)
-            return
-
-        entries = self._doc.get_toc()
-        if not entries:
-            self._tree.blockSignals(False)
-            self._update_button_states()
-            return
-
         stack: list[QTreeWidgetItem] = []
         for entry in entries:
             item = self._make_item(entry.title, entry.page)
@@ -188,8 +188,8 @@ class TocPanel(QWidget):
             else:
                 self._tree.addTopLevelItem(item)
             stack.append(item)
-
-        self._tree.expandAll()
+        if entries:
+            self._tree.expandAll()
         self._tree.blockSignals(False)
         self._update_button_states()
 
@@ -216,6 +216,22 @@ class TocPanel(QWidget):
         item.setTextAlignment(1, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
 
     # ------------------------------------------------------------------
+    # アンドゥ
+    # ------------------------------------------------------------------
+
+    def _push_history(self) -> None:
+        self._history.append(self.get_toc())
+        if len(self._history) > self._MAX_HISTORY:
+            self._history.pop(0)
+
+    def _undo(self) -> None:
+        if not self._history:
+            return
+        snapshot = self._history.pop()
+        self._build_tree_from_entries(snapshot)
+        self._emit_modified()
+
+    # ------------------------------------------------------------------
     # 編集操作
     # ------------------------------------------------------------------
 
@@ -224,6 +240,7 @@ class TocPanel(QWidget):
             return
         if page_index is None:
             page_index = self._current_page
+        self._staged_snapshot = self.get_toc()
 
         item = self._make_item(title, page_index)
         selected = self._tree.currentItem()
@@ -253,6 +270,7 @@ class TocPanel(QWidget):
         item = self._tree.currentItem()
         if item is None:
             return
+        self._push_history()
         parent = item.parent()
         if parent:
             parent.removeChild(item)
@@ -263,6 +281,7 @@ class TocPanel(QWidget):
         item = self._tree.currentItem()
         if item is None:
             return
+        self._push_history()
         parent = item.parent()
         if parent:
             idx = parent.indexOfChild(item)
@@ -281,6 +300,7 @@ class TocPanel(QWidget):
         item = self._tree.currentItem()
         if item is None:
             return
+        self._push_history()
         parent = item.parent()
         if parent:
             idx = parent.indexOfChild(item)
@@ -303,6 +323,7 @@ class TocPanel(QWidget):
         parent = item.parent()
         if parent is None:
             return  # 既にトップレベル
+        self._push_history()
         grandparent = parent.parent()
         idx_in_parent = parent.indexOfChild(item)
         parent.takeChild(idx_in_parent)
@@ -325,13 +346,16 @@ class TocPanel(QWidget):
             idx = parent.indexOfChild(item)
             if idx == 0:
                 return
-            prev = parent.child(idx - 1)
-            parent.takeChild(idx)
-            prev.addChild(item)
         else:
             idx = self._tree.indexOfTopLevelItem(item)
             if idx == 0:
                 return
+        self._push_history()
+        if parent:
+            prev = parent.child(idx - 1)
+            parent.takeChild(idx)
+            prev.addChild(item)
+        else:
             prev = self._tree.topLevelItem(idx - 1)
             self._tree.takeTopLevelItem(idx)
             prev.addChild(item)
@@ -365,6 +389,7 @@ class TocPanel(QWidget):
             if reply != QMessageBox.StandardButton.Yes:
                 return
 
+        self._push_history()
         self._tree.blockSignals(True)
         self._tree.clear()
         stack: list[QTreeWidgetItem] = []
@@ -414,8 +439,10 @@ class TocPanel(QWidget):
 
     def _on_item_double_clicked(self, item: QTreeWidgetItem, column: int) -> None:
         if column == 0:
+            self._push_history()
             self._tree.editItem(item, 0)
         elif column == 1:
+            self._push_history()
             self._tree.editItem(item, 1)
 
     def _on_item_changed(self, item: QTreeWidgetItem, column: int) -> None:
@@ -450,6 +477,8 @@ class TocPanel(QWidget):
         tree = QTreeWidget()
 
         def keyPressEvent(event):
+            if event.matches(QKeySequence.StandardKey.Undo):
+                self._undo(); return
             if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
                 key = event.key()
                 if key == Qt.Key.Key_Up:
@@ -463,6 +492,7 @@ class TocPanel(QWidget):
             elif event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
                 item = tree.currentItem()
                 if item is not None:
+                    self._push_history()
                     tree.editItem(item, 0)
                     return
             elif event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
@@ -477,7 +507,14 @@ class TocPanel(QWidget):
                     and self._pending_item is not None):
                 self._delete_item(self._pending_item)
                 self._pending_item = None
+                self._staged_snapshot = None
             else:
+                if self._staged_snapshot is not None:
+                    # 新規追加が確定: 追加前のスナップショットを履歴に積む
+                    self._history.append(self._staged_snapshot)
+                    if len(self._history) > self._MAX_HISTORY:
+                        self._history.pop(0)
+                    self._staged_snapshot = None
                 self._pending_item = None
             QTreeWidget.closeEditor(tree, editor, hint)
 

@@ -83,8 +83,8 @@ class TocPanel(QWidget):
         tb_layout.addStretch()
         layout.addWidget(toolbar)
 
-        # ツリー
-        self._tree = QTreeWidget()
+        # ツリー（Shift+矢印でボタン操作と同等のショートカット）
+        self._tree = self._make_tree()
         self._tree.setHeaderHidden(True)
         self._tree.setColumnCount(2)
         self._tree.setColumnWidth(0, 220)
@@ -436,6 +436,25 @@ class TocPanel(QWidget):
     # ------------------------------------------------------------------
     # ユーティリティ
     # ------------------------------------------------------------------
+
+    def _make_tree(self) -> QTreeWidget:
+        tree = QTreeWidget()
+
+        def keyPressEvent(event):
+            if event.modifiers() == Qt.KeyboardModifier.ShiftModifier:
+                key = event.key()
+                if key == Qt.Key.Key_Up:
+                    self._move_up(); return
+                if key == Qt.Key.Key_Down:
+                    self._move_down(); return
+                if key == Qt.Key.Key_Left:
+                    self._indent_left(); return
+                if key == Qt.Key.Key_Right:
+                    self._indent_right(); return
+            QTreeWidget.keyPressEvent(tree, event)
+
+        tree.keyPressEvent = keyPressEvent
+        return tree
 
     @staticmethod
     def _make_btn(text: str, tooltip: str) -> QPushButton:

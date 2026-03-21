@@ -464,7 +464,7 @@ class TocPanel(QWidget):
 
         def closeEditor(editor, hint):
             from PySide6.QtWidgets import QAbstractItemDelegate
-            if (hint == QAbstractItemDelegate.EndEditHint.RevertModelData
+            if (hint == QAbstractItemDelegate.EndEditHint.RevertModelCache
                     and self._pending_item is not None):
                 self._delete_item(self._pending_item)
                 self._pending_item = None

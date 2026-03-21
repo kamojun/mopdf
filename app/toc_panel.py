@@ -49,6 +49,7 @@ class TocPanel(QWidget):
         super().__init__(parent)
         self._doc: Optional[PdfDocument] = None
         self._current_page: int = 0     # MainWindowから更新される
+        self._pending_item: Optional[QTreeWidgetItem] = None  # 追加直後・未確定のアイテム
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -238,7 +239,15 @@ class TocPanel(QWidget):
             self._tree.addTopLevelItem(item)
 
         self._tree.setCurrentItem(item)
+        self._pending_item = item
         self._tree.editItem(item, 0)
+
+    def _delete_item(self, item: QTreeWidgetItem) -> None:
+        parent = item.parent()
+        if parent:
+            parent.removeChild(item)
+        else:
+            self._tree.takeTopLevelItem(self._tree.indexOfTopLevelItem(item))
 
     def _delete_entry(self) -> None:
         item = self._tree.currentItem()
@@ -453,7 +462,18 @@ class TocPanel(QWidget):
                     self._indent_right(); return
             QTreeWidget.keyPressEvent(tree, event)
 
+        def closeEditor(editor, hint):
+            from PySide6.QtWidgets import QAbstractItemDelegate
+            if (hint == QAbstractItemDelegate.EndEditHint.RevertModelData
+                    and self._pending_item is not None):
+                self._delete_item(self._pending_item)
+                self._pending_item = None
+            else:
+                self._pending_item = None
+            QTreeWidget.closeEditor(tree, editor, hint)
+
         tree.keyPressEvent = keyPressEvent
+        tree.closeEditor = closeEditor
         return tree
 
     @staticmethod

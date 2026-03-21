@@ -460,6 +460,15 @@ class TocPanel(QWidget):
                     self._indent_left(); return
                 if key == Qt.Key.Key_Right:
                     self._indent_right(); return
+            elif event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+                item = tree.currentItem()
+                if item is not None:
+                    tree.editItem(item, 0)
+                    return
+            elif event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
+                if tree.currentItem() is not None:
+                    self._delete_entry()
+                    return
             QTreeWidget.keyPressEvent(tree, event)
 
         def closeEditor(editor, hint):

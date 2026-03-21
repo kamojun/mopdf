@@ -1,9 +1,9 @@
 from __future__ import annotations
 from typing import Optional
-from PySide6.QtCore import Qt, Signal, QTimer
-from PySide6.QtGui import QPixmap, QImage
+from PySide6.QtCore import Qt, Signal, QTimer, QRect, QPoint
+from PySide6.QtGui import QPixmap, QImage, QPainter, QColor, QPen, QCursor
 from PySide6.QtWidgets import (
-    QScrollArea, QWidget, QVBoxLayout, QLabel, QSizePolicy, QFrame
+    QScrollArea, QWidget, QVBoxLayout, QLabel, QSizePolicy, QFrame, QRubberBand
 )
 
 from .pdf_document import PdfDocument
@@ -12,9 +12,21 @@ RENDER_BUFFER = 2  # 表示ページの前後何ページを先読みするか
 
 
 class PageWidget(QLabel):
-    def __init__(self, page_index: int, width: int, height: int) -> None:
+    """1ページ分の表示ウィジェット。テキスト選択モード時はドラッグで矩形選択できる。"""
+
+    text_selected = Signal(str, int)  # (抽出テキスト, 0-indexed page)
+
+    def __init__(self, page_index: int, width: int, height: int,
+                 doc: PdfDocument, zoom: float) -> None:
         super().__init__()
         self.page_index = page_index
+        self._doc = doc
+        self._zoom = zoom
+        self._select_mode = False
+
+        self._origin = QPoint()
+        self._rubber_band = QRubberBand(QRubberBand.Shape.Rectangle, self)
+
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.setFrameShape(QFrame.Shape.Box)
         self.setLineWidth(1)
@@ -22,9 +34,47 @@ class PageWidget(QLabel):
         self.setFixedSize(width, height)
         self.setStyleSheet("background: #e0e0e0; border: 1px solid #ccc; margin: 8px;")
 
+    def set_select_mode(self, enabled: bool) -> None:
+        self._select_mode = enabled
+        self.setCursor(QCursor(Qt.CursorShape.CrossCursor if enabled else Qt.CursorShape.ArrowCursor))
+
+    def mousePressEvent(self, event) -> None:
+        if self._select_mode and event.button() == Qt.MouseButton.LeftButton:
+            self._origin = event.pos()
+            self._rubber_band.setGeometry(QRect(self._origin, self._origin))
+            self._rubber_band.show()
+        else:
+            super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event) -> None:
+        if self._select_mode and not self._origin.isNull():
+            self._rubber_band.setGeometry(
+                QRect(self._origin, event.pos()).normalized()
+            )
+        else:
+            super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event) -> None:
+        if self._select_mode and not self._origin.isNull():
+            rect = QRect(self._origin, event.pos()).normalized()
+            self._rubber_band.hide()
+            self._origin = QPoint()
+
+            if rect.width() > 4 and rect.height() > 4:
+                text = self._doc.get_text_in_rect(
+                    self.page_index,
+                    (rect.x(), rect.y(), rect.right(), rect.bottom()),
+                    self._zoom,
+                )
+                if text:
+                    self.text_selected.emit(text, self.page_index)
+        else:
+            super().mouseReleaseEvent(event)
+
 
 class PdfViewer(QScrollArea):
-    page_changed = Signal(int)  # 0-indexed 現在ページ
+    page_changed = Signal(int)          # 0-indexed 現在ページ
+    text_selected = Signal(str, int)    # (抽出テキスト, 0-indexed page)
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
@@ -32,6 +82,7 @@ class PdfViewer(QScrollArea):
         self._zoom: float = 1.5
         self._page_widgets: list[PageWidget] = []
         self._rendered: set[int] = set()
+        self._select_mode: bool = False
 
         self._container = QWidget()
         self._layout = QVBoxLayout(self._container)
@@ -44,7 +95,6 @@ class PdfViewer(QScrollArea):
         self.setAlignment(Qt.AlignmentFlag.AlignHCenter)
         self.setStyleSheet("background: #525659;")
 
-        # スクロール後に少し待ってからレンダリング（連続スクロール中の無駄な描画を防ぐ）
         self._render_timer = QTimer(self)
         self._render_timer.setSingleShot(True)
         self._render_timer.setInterval(80)
@@ -64,6 +114,11 @@ class PdfViewer(QScrollArea):
         if 0 <= page_index < len(self._page_widgets):
             self.ensureWidgetVisible(self._page_widgets[page_index])
 
+    def set_select_mode(self, enabled: bool) -> None:
+        self._select_mode = enabled
+        for pw in self._page_widgets:
+            pw.set_select_mode(enabled)
+
     # ------------------------------------------------------------------
 
     def _rebuild(self) -> None:
@@ -71,14 +126,14 @@ class PdfViewer(QScrollArea):
         if self._doc is None:
             return
 
-        # プレースホルダーを配置（レンダリングなし → 即座に完了）
         for i in range(self._doc.page_count):
             w, h = self._doc.get_page_size(i, self._zoom)
-            pw = PageWidget(i, w, h)
+            pw = PageWidget(i, w, h, self._doc, self._zoom)
+            pw.set_select_mode(self._select_mode)
+            pw.text_selected.connect(self.text_selected)
             self._layout.addWidget(pw)
             self._page_widgets.append(pw)
 
-        # レイアウト確定後に見えているページをレンダリング
         QTimer.singleShot(0, self._render_visible)
 
     def _clear_pages(self) -> None:
@@ -89,7 +144,6 @@ class PdfViewer(QScrollArea):
         self._rendered.clear()
 
     def _visible_page_range(self) -> tuple[int, int]:
-        """現在ビューポートに表示されているページの範囲（バッファ込み）を返す"""
         if not self._page_widgets:
             return (0, 0)
         scroll_top = self.verticalScrollBar().value()

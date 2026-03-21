@@ -146,6 +146,17 @@ class PdfDocument:
         rect = self._doc[page_index].rect
         return (int(rect.width * zoom), int(rect.height * zoom))
 
+    def get_text_in_rect(self, page_index: int, rect_px: tuple[float, float, float, float], zoom: float) -> str:
+        """ピクセル座標の矩形内のテキストを抽出する。rect_px=(x0,y0,x1,y1)"""
+        if self._doc is None:
+            return ""
+        x0, y0, x1, y1 = rect_px
+        pdf_rect = fitz.Rect(x0 / zoom, y0 / zoom, x1 / zoom, y1 / zoom)
+        try:
+            return self._doc[page_index].get_textbox(pdf_rect).strip()
+        except Exception:
+            return ""
+
     def render_page(self, page_index: int, zoom: float = 1.5) -> QImage:
         if self._doc is None:
             raise RuntimeError("No document open")

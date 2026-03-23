@@ -5,7 +5,7 @@ from PySide6.QtCore import Qt, QSize
 from PySide6.QtGui import QAction, QDragEnterEvent, QDropEvent
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QSplitter, QFileDialog,
-    QStatusBar, QLabel, QMessageBox, QToolBar, QPushButton
+    QStatusBar, QLabel, QMessageBox, QToolBar, QPushButton, QLineEdit
 )
 
 from .pdf_document import PdfDocument
@@ -70,8 +70,8 @@ class MainWindow(QMainWindow):
         self._toc_panel.page_jump_requested.connect(self._viewer.scroll_to_page)
         # 目次編集 → 未保存フラグ
         self._toc_panel.toc_modified.connect(self._mark_unsaved)
-        # ページラベル編集 → 未保存フラグ
-        self._page_label_panel.page_labels_modified.connect(self._mark_unsaved)
+        # ページラベル編集 → 即時反映 + 未保存フラグ
+        self._page_label_panel.page_labels_modified.connect(self._on_page_labels_modified)
 
         # ビューアのページ変更 → TocPanel に現在ページを通知
         self._viewer.page_changed.connect(self._toc_panel.set_current_page)
@@ -85,6 +85,16 @@ class MainWindow(QMainWindow):
         self._btn_select_mode.setToolTip("PDFテキストを選択して目次エントリのタイトルに使用")
         self._btn_select_mode.toggled.connect(self._on_select_mode_toggled)
         toolbar.addWidget(self._btn_select_mode)
+
+        toolbar.addSeparator()
+
+        self._page_input = QLineEdit()
+        self._page_input.setPlaceholderText("ページへ移動...")
+        self._page_input.setFixedWidth(130)
+        self._page_input.setEnabled(False)
+        self._page_input.returnPressed.connect(self._on_page_jump_input)
+        toolbar.addWidget(self._page_input)
+
         self.addToolBar(toolbar)
 
     def _setup_menu(self) -> None:
@@ -141,6 +151,7 @@ class MainWindow(QMainWindow):
         self._toc_panel.load(self._doc)
         self._page_label_panel.load(self._doc)
         self._btn_select_mode.setEnabled(True)
+        self._page_input.setEnabled(True)
 
         self._unsaved = False
         self._update_title()
@@ -189,6 +200,29 @@ class MainWindow(QMainWindow):
     # テキスト選択モード
     # ------------------------------------------------------------------
 
+    def _on_page_jump_input(self) -> None:
+        if not self._doc.is_open:
+            return
+        text = self._page_input.text().strip()
+        if not text:
+            return
+
+        # まずページラベルで検索
+        page_index = self._doc.find_page_by_label(text)
+
+        # 見つからなければ整数（1-based物理ページ番号）として解釈
+        if page_index < 0:
+            try:
+                phys = int(text)
+                page_index = phys - 1
+            except ValueError:
+                return
+
+        page_index = max(0, min(page_index, self._doc.page_count - 1))
+        self._viewer.scroll_to_page(page_index)
+        self._page_input.clear()
+        self._viewer.setFocus()
+
     def _on_select_mode_toggled(self, enabled: bool) -> None:
         self._viewer.set_select_mode(enabled)
         if enabled:
@@ -221,6 +255,14 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
     # 未保存状態管理
     # ------------------------------------------------------------------
+
+    def _on_page_labels_modified(self) -> None:
+        if self._doc.is_open:
+            self._doc.set_page_labels(self._page_label_panel.get_page_labels())
+            self._viewer.refresh_page_labels()
+            self._toc_panel.refresh_page_labels()
+            self._update_status(self._current_page)
+        self._mark_unsaved()
 
     def _mark_unsaved(self) -> None:
         if not self._unsaved:

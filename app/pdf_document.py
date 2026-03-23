@@ -135,6 +135,19 @@ class PdfDocument:
         except Exception:
             return ""
 
+    def find_page_by_label(self, label: str) -> int:
+        """ページラベル文字列から0-indexed物理ページ番号を返す。見つからなければ-1。"""
+        if self._doc is None:
+            return -1
+        label = label.strip()
+        for i in range(self._doc.page_count):
+            try:
+                if self._doc[i].get_label() == label:
+                    return i
+            except Exception:
+                pass
+        return -1
+
     # ------------------------------------------------------------------
     # レンダリング
     # ------------------------------------------------------------------

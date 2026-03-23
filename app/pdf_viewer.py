@@ -38,6 +38,9 @@ class PageWidget(QLabel):
         self._select_mode = enabled
         self.setCursor(QCursor(Qt.CursorShape.CrossCursor if enabled else Qt.CursorShape.ArrowCursor))
 
+    def refresh_label(self) -> None:
+        self.update()  # type: ignore[misc]
+
     def paintEvent(self, event) -> None:
         super().paintEvent(event)
         if self._doc is None or self.pixmap() is None or self.pixmap().isNull():
@@ -144,6 +147,11 @@ class PdfViewer(QScrollArea):
         self._select_mode = enabled
         for pw in self._page_widgets:
             pw.set_select_mode(enabled)
+
+    def refresh_page_labels(self) -> None:
+        """ページラベル表示を再描画する（ドキュメントのラベルが更新された後に呼ぶ）。"""
+        for pw in self._page_widgets:
+            pw.refresh_label()
 
     # ------------------------------------------------------------------
 

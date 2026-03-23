@@ -140,6 +140,15 @@ class TocPanel(QWidget):
         self._tree.clear()
         self._update_button_states()
 
+    def refresh_page_labels(self) -> None:
+        """全エントリのページラベル表示を更新する。"""
+        def walk(item: QTreeWidgetItem) -> None:
+            self._refresh_page_label(item)
+            for i in range(item.childCount()):
+                walk(item.child(i))
+        for i in range(self._tree.topLevelItemCount()):
+            walk(self._tree.topLevelItem(i))
+
     def set_current_page(self, page_index: int) -> None:
         self._current_page = page_index
 

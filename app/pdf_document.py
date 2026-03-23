@@ -188,6 +188,13 @@ class PdfDocument:
             return
         target = Path(path) if path else self._path
         if target == self._path:
-            self._doc.save(str(target), incremental=True, encryption=fitz.PDF_ENCRYPT_KEEP)
+            try:
+                self._doc.save(str(target), incremental=True, encryption=fitz.PDF_ENCRYPT_KEEP)
+            except Exception:
+                # 修復済みPDFなどインクリメンタル書き込み不可の場合はフルリライト
+                import tempfile, shutil, os
+                tmp = Path(tempfile.mktemp(suffix=".pdf", dir=target.parent))
+                self._doc.save(str(tmp))
+                shutil.move(str(tmp), str(target))
         else:
             self._doc.save(str(target))

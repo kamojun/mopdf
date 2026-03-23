@@ -133,7 +133,7 @@ class PdfDocument:
         try:
             return self._doc[page_index].get_label()
         except Exception:
-            return str(page_index + 1)
+            return ""
 
     # ------------------------------------------------------------------
     # レンダリング

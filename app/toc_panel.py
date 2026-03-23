@@ -212,7 +212,7 @@ class TocPanel(QWidget):
         if page is None or self._doc is None:
             return
         label = self._doc.get_page_label_for(page)
-        item.setText(1, label)
+        item.setText(1, label if label else f"({page + 1})")
         item.setTextAlignment(1, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
 
     # ------------------------------------------------------------------

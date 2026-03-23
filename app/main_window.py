@@ -259,9 +259,9 @@ class MainWindow(QMainWindow):
             return
         label = self._doc.get_page_label_for(page_index)
         total = self._doc.page_count
-        self._status_label.setText(
-            f"ページ {label}  （{page_index + 1} / {total}）"
-        )
+        phys = f"({page_index + 1}/{total})"
+        text = f"ページ {label} {phys}" if label else f"ページ {phys}"
+        self._status_label.setText(text)
 
     # ------------------------------------------------------------------
 

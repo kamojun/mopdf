@@ -43,8 +43,9 @@ class PageWidget(QLabel):
         if self._doc is None or self.pixmap() is None or self.pixmap().isNull():
             return
         label = self._doc.get_page_label_for(self.page_index)
-        if not label:
-            return
+        total = self._doc.page_count
+        phys = f"({self.page_index + 1}/{total})"
+        display = f"{label} {phys}" if label else phys
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
         font = QFont()
@@ -53,14 +54,14 @@ class PageWidget(QLabel):
         painter.setFont(font)
         fm = painter.fontMetrics()
         padding = 5
-        text_rect = fm.boundingRect(label)
+        text_rect = fm.boundingRect(display)
         bg_w = text_rect.width() + padding * 2
         bg_h = text_rect.height() + padding * 2
         bg_x = (self.width() - bg_w) // 2
         bg_y = self.height() - bg_h - 14
         painter.fillRect(bg_x, bg_y, bg_w, bg_h, QColor(0, 0, 0, 150))
         painter.setPen(QColor(255, 255, 255))
-        painter.drawText(bg_x, bg_y, bg_w, bg_h, Qt.AlignmentFlag.AlignCenter, label)
+        painter.drawText(bg_x, bg_y, bg_w, bg_h, Qt.AlignmentFlag.AlignCenter, display)
         painter.end()
 
     def mousePressEvent(self, event) -> None:

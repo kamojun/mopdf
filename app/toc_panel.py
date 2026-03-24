@@ -2,7 +2,7 @@ from __future__ import annotations
 import csv
 import io
 from typing import Optional
-from PySide6.QtCore import Qt, Signal, QModelIndex
+from PySide6.QtCore import Qt, Signal, QModelIndex, QTimer, QEvent
 from PySide6.QtGui import QKeySequence
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QTreeWidget, QTreeWidgetItem,
@@ -11,6 +11,28 @@ from PySide6.QtWidgets import (
 )
 
 from .pdf_document import PdfDocument, TocEntry
+
+
+class TitleDelegate(QStyledItemDelegate):
+    """タイトル列のデリゲート。Tab で同行のページ番号列編集に移る。"""
+
+    def __init__(self, on_tab, parent=None):
+        super().__init__(parent)
+        self._on_tab = on_tab
+        self._current_index = QModelIndex()
+
+    def createEditor(self, parent, option, index):
+        self._current_index = index
+        return super().createEditor(parent, option, index)
+
+    def eventFilter(self, editor, event):
+        if (event.type() == QEvent.Type.KeyPress
+                and event.key() == Qt.Key.Key_Tab):
+            self.commitData.emit(editor)
+            self.closeEditor.emit(editor, QStyledItemDelegate.EndEditHint.NoHint)
+            self._on_tab(self._current_index)
+            return True
+        return super().eventFilter(editor, event)
 
 
 class PageSpinDelegate(QStyledItemDelegate):
@@ -25,11 +47,13 @@ class PageSpinDelegate(QStyledItemDelegate):
         editor.setMinimum(1)
         editor.setMaximum(self._get_page_count())
         editor.setFrame(False)
+        editor.setAlignment(Qt.AlignmentFlag.AlignRight)
+        editor.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
         return editor
 
     def setEditorData(self, editor, index):
-        # UserRole2 に物理ページ(0-indexed)を格納済み
-        page0 = index.data(Qt.ItemDataRole.UserRole + 1)
+        # ページ数は列0の UserRole に格納されている
+        page0 = index.sibling(index.row(), 0).data(Qt.ItemDataRole.UserRole)
         if page0 is not None:
             editor.setValue(page0 + 1)
 
@@ -102,7 +126,15 @@ class TocPanel(QWidget):
         self._tree.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
         self._tree.setDefaultDropAction(Qt.DropAction.MoveAction)
 
-        # 列0: タイトル編集可, 列1: デリゲートでSpinBox
+        # 列0: タイトル編集可(Tab→列1へ), 列1: デリゲートでSpinBox
+        self._tree.setItemDelegateForColumn(
+            0, TitleDelegate(
+                on_tab=lambda idx: QTimer.singleShot(
+                    0, lambda: self._tree.editItem(self._tree.itemFromIndex(idx), 1)
+                ),
+                parent=self,
+            )
+        )
         self._tree.setItemDelegateForColumn(
             1, PageSpinDelegate(lambda: self._doc.page_count if self._doc else 9999, self)
         )
@@ -459,11 +491,11 @@ class TocPanel(QWidget):
 
     def _on_item_changed(self, item: QTreeWidgetItem, column: int) -> None:
         if column == 1:
-            # SpinBoxデリゲートがUserRole+1に書いた値を読み、UserRole(ページ)に反映
-            page = item.data(0, Qt.ItemDataRole.UserRole + 1)
+            # SpinBoxデリゲートがUserRole+1に列1として書いた値を読み、列0のUserRole(ページ)に反映
+            page = item.data(1, Qt.ItemDataRole.UserRole + 1)
             if page is not None:
                 item.setData(0, Qt.ItemDataRole.UserRole, page)
-                item.setData(0, Qt.ItemDataRole.UserRole + 1, None)
+                item.setData(1, Qt.ItemDataRole.UserRole + 1, None)
             self._refresh_page_label(item)
         self._emit_modified()
 

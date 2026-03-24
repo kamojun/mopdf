@@ -159,6 +159,12 @@ class PdfDocument:
         rect = self._doc[page_index].rect
         return (int(rect.width * zoom), int(rect.height * zoom))
 
+    def get_all_page_sizes(self, zoom: float = 1.5) -> list[tuple[int, int]]:
+        """全ページのサイズを一括取得する（ループ1回で済む）"""
+        if self._doc is None:
+            return []
+        return [(int(p.rect.width * zoom), int(p.rect.height * zoom)) for p in self._doc]
+
     def get_text_in_rect(self, page_index: int, rect_px: tuple[float, float, float, float], zoom: float) -> str:
         """ピクセル座標の矩形内のテキストを抽出する。rect_px=(x0,y0,x1,y1)"""
         if self._doc is None:

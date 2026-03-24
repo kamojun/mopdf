@@ -301,8 +301,11 @@ class MainWindow(QMainWindow):
             return
         label = self._doc.get_page_label_for(page_index)
         total = self._doc.page_count
-        phys = f"({page_index + 1}/{total})"
-        text = f"ページ {label} {phys}" if label else f"ページ {phys}"
+        if label:
+            phys = f"({page_index + 1}/{total})"
+            text = f"ページ {label} {phys}"
+        else:
+            text = f"ページ {page_index + 1}/{total}"
         self._status_label.setText(text)
 
     # ------------------------------------------------------------------

@@ -47,8 +47,11 @@ class PageWidget(QLabel):
             return
         label = self._doc.get_page_label_for(self.page_index)
         total = self._doc.page_count
-        phys = f"({self.page_index + 1}/{total})"
-        display = f"{label} {phys}" if label else phys
+        if label:
+            phys = f"({self.page_index + 1}/{total})"
+            display = f"{label} {phys}"
+        else:
+            display = f"{self.page_index + 1}/{total}"
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
         font = QFont()

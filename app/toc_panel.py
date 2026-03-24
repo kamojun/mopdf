@@ -244,12 +244,12 @@ class TocPanel(QWidget):
     # 編集操作
     # ------------------------------------------------------------------
 
-    def _add_entry(self, *, title: str = "（無題）", page_index: Optional[int] = None) -> None:
+    def _add_entry(self, *, title: str = "（無題）", page_index: Optional[int] = None, before: bool = False) -> None:
         if self._doc is None:
             return
         if page_index is None:
             page_index = self._current_page
-        self._staged_snapshot = self.get_toc()
+        snapshot = self.get_toc()
 
         item = self._make_item(title, page_index)
         selected = self._tree.currentItem()
@@ -257,16 +257,19 @@ class TocPanel(QWidget):
             parent = selected.parent()
             if parent:
                 idx = parent.indexOfChild(selected)
-                parent.insertChild(idx + 1, item)
+                parent.insertChild(idx if before else idx + 1, item)
             else:
                 idx = self._tree.indexOfTopLevelItem(selected)
-                self._tree.insertTopLevelItem(idx + 1, item)
+                self._tree.insertTopLevelItem(idx if before else idx + 1, item)
         else:
             self._tree.addTopLevelItem(item)
 
         self._tree.setCurrentItem(item)
-        self._pending_item = item
         self._tree.editItem(item, 0)
+        # editItem が前のエディタを同期的に閉じて _pending_item/_staged_snapshot を
+        # クリアする場合があるため、editItem 呼び出し後に設定する
+        self._pending_item = item
+        self._staged_snapshot = snapshot
 
     def _delete_item(self, item: QTreeWidgetItem) -> None:
         parent = item.parent()
@@ -486,6 +489,9 @@ class TocPanel(QWidget):
         tree = QTreeWidget()
 
         def keyPressEvent(event):
+            from PySide6.QtWidgets import QApplication
+            if QApplication.focusWidget() is not tree:
+                QTreeWidget.keyPressEvent(tree, event); return
             if event.matches(QKeySequence.StandardKey.Undo):
                 self._undo(); return
             if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
@@ -498,6 +504,8 @@ class TocPanel(QWidget):
                     self._indent_left(); return
                 if key == Qt.Key.Key_Right:
                     self._indent_right(); return
+                if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+                    self._add_entry(before=True); return
             elif event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
                 item = tree.currentItem()
                 if item is not None:

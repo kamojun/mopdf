@@ -32,6 +32,11 @@
   - `get_all_page_sizes()` で全ページサイズを1パスで取得
   - `_rebuild()` で軽量 `QWidget` プレースホルダーを生成（PageWidget は不要）
   - スクロール時に `_ensure_page_widget()` で必要分だけ PageWidget に昇格
+- [x] レンダリング非同期化（UIスレッドフリーズ解消）
+  - `app/render_worker.py` を新規作成（`QRunnable` + `QThreadPool`）
+  - `_render_visible()` を非同期版に置き換え（`RenderWorker` をキューに投入）
+  - `_pending_cancels` + `_render_generation` でキャンセル・世代管理
+  - ページ切り替え・ドキュメントクローズ時に進行中ジョブをキャンセル
 
 ## Phase 4: 仕上げ
 

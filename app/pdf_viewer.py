@@ -1,12 +1,14 @@
 from __future__ import annotations
+import threading
 from typing import Optional
-from PySide6.QtCore import Qt, Signal, QTimer, QRect, QPoint
+from PySide6.QtCore import Qt, Signal, QTimer, QRect, QPoint, QThreadPool, Slot
 from PySide6.QtGui import QPixmap, QImage, QPainter, QColor, QPen, QCursor, QFont
 from PySide6.QtWidgets import (
     QScrollArea, QWidget, QVBoxLayout, QLabel, QSizePolicy, QFrame, QRubberBand
 )
 
 from .pdf_document import PdfDocument
+from .render_worker import RenderWorker
 
 RENDER_BUFFER = 2  # 表示ページの前後何ページを先読みするか
 
@@ -117,6 +119,11 @@ class PdfViewer(QScrollArea):
         self._rendered: set[int] = set()
         self._select_mode: bool = False
 
+        self._render_pool = QThreadPool.globalInstance()
+        self._render_pool.setMaxThreadCount(3)
+        self._pending_cancels: dict[int, threading.Event] = {}
+        self._render_generation: int = 0
+
         self._container = QWidget()
         self._layout = QVBoxLayout(self._container)
         self._layout.setAlignment(Qt.AlignmentFlag.AlignHCenter)
@@ -140,6 +147,10 @@ class PdfViewer(QScrollArea):
         self._rebuild()
 
     def clear(self) -> None:
+        for event in self._pending_cancels.values():
+            event.set()
+        self._pending_cancels.clear()
+        self._render_generation += 1
         self._doc = None
         self._clear_pages()
 
@@ -162,6 +173,12 @@ class PdfViewer(QScrollArea):
     # ------------------------------------------------------------------
 
     def _rebuild(self) -> None:
+        # 進行中のレンダリングをすべてキャンセル
+        for event in self._pending_cancels.values():
+            event.set()
+        self._pending_cancels.clear()
+        self._render_generation += 1
+
         self._clear_pages()
         self.verticalScrollBar().setValue(0)
         if self._doc is None:
@@ -223,16 +240,44 @@ class PdfViewer(QScrollArea):
         return (first, last)
 
     def _render_visible(self) -> None:
-        if self._doc is None:
+        if self._doc is None or self._doc.path is None:
             return
         first, last = self._visible_page_range()
+
+        # 範囲外ページのキャンセル
+        for idx in list(self._pending_cancels):
+            if idx < first or idx > last:
+                self._pending_cancels.pop(idx).set()
+
+        # 未レンダリング・未投入ページをエンキュー
         for i in range(first, last + 1):
-            if i not in self._rendered:
-                pw = self._ensure_page_widget(i)
-                img = self._doc.render_page(i, self._zoom)
-                pw.setPixmap(QPixmap.fromImage(img))
-                pw.setStyleSheet("background: white; border: 1px solid #ccc; margin: 8px;")
-                self._rendered.add(i)
+            if i not in self._rendered and i not in self._pending_cancels:
+                self._enqueue_render(i)
+
+    def _enqueue_render(self, page_index: int) -> None:
+        cancel = threading.Event()
+        self._pending_cancels[page_index] = cancel
+        worker = RenderWorker(
+            path=str(self._doc.path),
+            page_index=page_index,
+            zoom=self._zoom,
+            generation=self._render_generation,
+            cancel=cancel,
+        )
+        worker.signals.finished.connect(self._on_render_finished)
+        self._render_pool.start(worker)
+
+    @Slot(int, QImage, int)
+    def _on_render_finished(self, page_index: int, img: QImage, generation: int) -> None:
+        if generation != self._render_generation:
+            return
+        self._pending_cancels.pop(page_index, None)
+        if page_index >= len(self._page_widgets):
+            return
+        pw = self._ensure_page_widget(page_index)
+        pw.setPixmap(QPixmap.fromImage(img))
+        pw.setStyleSheet("background: white; border: 1px solid #ccc; margin: 8px;")
+        self._rendered.add(page_index)
 
     def _on_scroll(self) -> None:
         self._render_timer.start()

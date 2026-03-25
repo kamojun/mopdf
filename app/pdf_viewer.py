@@ -221,22 +221,22 @@ class PdfViewer(QScrollArea):
         self._rendered.clear()
 
     def _visible_page_range(self) -> tuple[int, int]:
-        if not self._page_widgets:
+        if not self._page_sizes:
             return (0, 0)
         scroll_top = self.verticalScrollBar().value()
         scroll_bottom = scroll_top + self.viewport().height()
 
-        first = len(self._page_widgets) - 1
+        first = len(self._page_sizes) - 1
         last = 0
-        for i, pw in enumerate(self._page_widgets):
-            top = pw.pos().y()
-            bottom = top + pw.height()
-            if bottom >= scroll_top and top <= scroll_bottom:
+        y = 0
+        for i, (w, h) in enumerate(self._page_sizes):
+            if y + h >= scroll_top and y <= scroll_bottom:
                 first = min(first, i)
                 last = max(last, i)
+            y += h
 
         first = max(0, first - RENDER_BUFFER)
-        last = min(len(self._page_widgets) - 1, last + RENDER_BUFFER)
+        last = min(len(self._page_sizes) - 1, last + RENDER_BUFFER)
         return (first, last)
 
     def _render_visible(self) -> None:
@@ -284,14 +284,16 @@ class PdfViewer(QScrollArea):
         self._update_current_page()
 
     def _update_current_page(self) -> None:
-        if not self._page_widgets:
+        if not self._page_sizes:
             return
         viewport_center_y = self.verticalScrollBar().value() + self.viewport().height() // 2
         best = 0
-        for i, pw in enumerate(self._page_widgets):
-            widget_center = pw.pos().y() + pw.height() // 2
-            if abs(widget_center - viewport_center_y) < abs(
-                self._page_widgets[best].pos().y() + self._page_widgets[best].height() // 2 - viewport_center_y
-            ):
+        y = 0
+        best_dist = float('inf')
+        for i, (w, h) in enumerate(self._page_sizes):
+            dist = abs(y + h // 2 - viewport_center_y)
+            if dist < best_dist:
+                best_dist = dist
                 best = i
+            y += h
         self.page_changed.emit(best)

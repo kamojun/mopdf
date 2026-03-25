@@ -227,6 +227,102 @@ class PageLabelPanel(QWidget):
             for r in labels:
                 writer.writerow([r.start_page + 1, r.style, r.prefix, r.first_num])
 
+    def _import_csv(self) -> None:
+        if self._doc is None:
+            return
+        path, _ = QFileDialog.getOpenFileName(
+            self, "CSVファイルを開く", "", "CSV Files (*.csv);;All Files (*)"
+        )
+        if not path:
+            return
+
+        try:
+            ranges, warnings = self._parse_csv_with_warnings(path)
+        except Exception as e:
+            QMessageBox.critical(self, "CSVエラー", f"読み込みに失敗しました:\n{e}")
+            return
+
+        if not ranges:
+            QMessageBox.information(self, "CSV", "有効なエントリが見つかりませんでした。")
+            return
+
+        if self._table.rowCount() > 0:
+            reply = QMessageBox.question(
+                self, "確認",
+                "既存のページラベルを上書きしますか？",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                return
+
+        self._table.blockSignals(True)
+        self._table.setRowCount(0)
+        self._table.setRowCount(len(ranges))
+        for row, r in enumerate(ranges):
+            self._populate_row(row, r)
+        self._table.blockSignals(False)
+        self.page_labels_modified.emit()
+
+        if warnings:
+            QMessageBox.warning(
+                self, "インポート警告",
+                "一部の行をスキップしました:\n\n" + "\n".join(warnings)
+            )
+
+    def _parse_csv_with_warnings(self, path: str) -> tuple[list, list[str]]:
+        """CSV形式: start_page,style,prefix,first_num を読み込む。
+        不正な行はスキップして警告リストに記録する。
+        """
+        ranges = []
+        warnings = []
+        page_count = self._doc.page_count if self._doc else 0
+
+        with open(path, newline="", encoding="utf-8-sig") as f:
+            reader = csv.reader(f)
+            for row_num, row in enumerate(reader, 1):
+                if not row or row[0].strip().startswith("#"):
+                    continue
+                if row[0].strip().lower() == "start_page":
+                    continue  # ヘッダー行をスキップ
+                if len(row) < 4:
+                    continue  # カラム不足は黙ってスキップ
+
+                # start_page
+                try:
+                    start_page = int(row[0].strip())
+                except ValueError:
+                    warnings.append(f"行{row_num}: start_page が不正です: '{row[0].strip()}'")
+                    continue
+                if not (1 <= start_page <= page_count):
+                    warnings.append(
+                        f"行{row_num}: start_page {start_page} はページ範囲外です (1–{page_count})"
+                    )
+                    continue
+
+                # style
+                style = row[1].strip()
+                if style not in STYLE_ORDER:
+                    warnings.append(f"行{row_num}: スタイルコード '{style}' は無効です")
+                    continue
+
+                prefix = row[2].strip()
+
+                # first_num
+                try:
+                    first_num = int(row[3].strip())
+                except ValueError:
+                    warnings.append(f"行{row_num}: first_num が不正です: '{row[3].strip()}'")
+                    continue
+
+                ranges.append(PageLabelRange(
+                    start_page=start_page - 1,
+                    style=style,
+                    prefix=prefix,
+                    first_num=first_num,
+                ))
+
+        return ranges, warnings
+
     def _export_csv(self) -> None:
         default = ""
         if self._doc is not None and self._doc.path is not None:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 import csv
 import io
+import re
 from typing import Optional
 from PySide6.QtCore import Qt, Signal, QModelIndex, QTimer, QEvent
 from PySide6.QtGui import QKeySequence
@@ -439,6 +440,8 @@ class TocPanel(QWidget):
             QMessageBox.critical(self, "CSVエラー", f"書き出しに失敗しました:\n{e}")
 
     def _import_csv(self) -> None:
+        if self._pending_item is not None:
+            return
         path, _ = QFileDialog.getOpenFileName(
             self, "CSVファイルを開く", "", "CSV Files (*.csv);;All Files (*)"
         )
@@ -446,7 +449,7 @@ class TocPanel(QWidget):
             return
 
         try:
-            entries = self._parse_csv(path)
+            entries, warnings = self._parse_csv_with_warnings(path)
         except Exception as e:
             QMessageBox.critical(self, "CSVエラー", f"読み込みに失敗しました:\n{e}")
             return
@@ -465,43 +468,89 @@ class TocPanel(QWidget):
                 return
 
         self._push_history()
-        self._tree.blockSignals(True)
-        self._tree.clear()
-        stack: list[QTreeWidgetItem] = []
-        for entry in entries:
-            item = self._make_item(entry.title, entry.page)
-            depth = entry.level - 1
-            while len(stack) > depth:
-                stack.pop()
-            if stack:
-                stack[-1].addChild(item)
-            else:
-                self._tree.addTopLevelItem(item)
-            stack.append(item)
-        self._tree.expandAll()
-        self._tree.blockSignals(False)
+        self._build_tree_from_entries(entries)
         self._emit_modified()
 
-    def _parse_csv(self, path: str) -> list[TocEntry]:
-        """CSV形式: level,title,page (pageは1-indexed物理ページ番号)"""
-        entries = []
+        if warnings:
+            QMessageBox.warning(
+                self, "インポート警告",
+                "一部のページ番号を解決できませんでした。\n"
+                "フォールバックページを付与してインポートしました。\n\n"
+                + "\n".join(warnings)
+                + "\n\nUIで該当エントリを確認・修正してください。"
+            )
+
+    def _parse_csv_with_warnings(self, path: str) -> tuple[list[TocEntry], list[str]]:
+        """CSV形式: level,title,page を読み込む。
+        page は論理ページラベル / (n)形式 / 整数（1-indexed物理）の3形式を受け付ける。
+        解決できないページはフォールバック（直前の成功ページまたは0）を使用し警告を返す。
+        """
+        entries: list[TocEntry] = []
+        warnings: list[str] = []
+        fallback_page = 0  # 直前の成功エントリのページ（0-indexed）
+
         with open(path, newline="", encoding="utf-8-sig") as f:
             reader = csv.reader(f)
             for row_num, row in enumerate(reader, 1):
-                if not row or row[0].startswith("#"):
+                if not row or row[0].strip().startswith("#"):
                     continue
+                if row[0].strip().lower() == "level":
+                    continue  # ヘッダー行をスキップ
                 if len(row) < 3:
-                    raise ValueError(f"行{row_num}: カラムが不足しています (level,title,page)")
+                    continue  # カラム不足は黙ってスキップ
                 try:
                     level = int(row[0].strip())
-                    title = row[1].strip()
-                    page = int(row[2].strip()) - 1  # 0-indexed に変換
                 except ValueError:
-                    raise ValueError(f"行{row_num}: フォーマットエラー")
+                    continue
                 if level < 1:
-                    raise ValueError(f"行{row_num}: levelは1以上にしてください")
-                entries.append(TocEntry(level=level, title=title, page=page))
-        return entries
+                    continue
+                title = row[1].strip()
+                page_str = row[2].strip()
+
+                # ページ解決
+                page0 = self._resolve_page(page_str)
+                if page0 is None:
+                    warnings.append(
+                        f"行{row_num}: ページ '{page_str}' が見つかりません"
+                        f"（フォールバック: {fallback_page + 1} ページ目を使用）"
+                    )
+                    page0 = fallback_page
+                else:
+                    if self._doc is not None and page0 >= self._doc.page_count:
+                        clamped = self._doc.page_count - 1
+                        warnings.append(
+                            f"行{row_num}: ページ {page0 + 1} は範囲外です"
+                            f"（最終ページ {self._doc.page_count} を使用）"
+                        )
+                        page0 = clamped
+                    fallback_page = page0
+
+                entries.append(TocEntry(level=level, title=title, page=page0))
+
+        return entries, warnings
+
+    def _resolve_page(self, page_str: str) -> Optional[int]:
+        """ページ文字列を0-indexed物理ページ番号に解決する。解決不能な場合はNoneを返す。"""
+        # パターン1: 整数のみ → 1-indexed物理ページ
+        try:
+            n = int(page_str)
+            return max(0, n - 1)
+        except ValueError:
+            pass
+
+        # パターン2: (n)形式 → 1-indexed物理ページ
+        m = re.match(r'^\((\d+)\)$', page_str)
+        if m:
+            n = int(m.group(1))
+            return max(0, n - 1)
+
+        # パターン3: 論理ページラベル
+        if self._doc is not None:
+            result = self._doc.find_page_by_label(page_str)
+            if result >= 0:
+                return result
+
+        return None
 
     # ------------------------------------------------------------------
     # イベントハンドラ

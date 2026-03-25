@@ -131,16 +131,30 @@ class MainWindow(QMainWindow):
         file_menu.addSeparator()
 
         csv_export_menu = QMenu("CSVエクスポート", self)
-        export_toc_action = QAction("目次をエクスポート...", self)
-        export_toc_action.triggered.connect(self._export_toc_csv)
-        csv_export_menu.addAction(export_toc_action)
-        export_labels_action = QAction("ページラベルをエクスポート...", self)
-        export_labels_action.triggered.connect(self._export_labels_csv)
-        csv_export_menu.addAction(export_labels_action)
-        export_both_action = QAction("両方エクスポート...", self)
-        export_both_action.triggered.connect(self._export_both_csv)
-        csv_export_menu.addAction(export_both_action)
+        self._action_export_toc = QAction("目次をエクスポート...", self)
+        self._action_export_toc.triggered.connect(self._export_toc_csv)
+        self._action_export_toc.setEnabled(False)
+        csv_export_menu.addAction(self._action_export_toc)
+        self._action_export_labels = QAction("ページラベルをエクスポート...", self)
+        self._action_export_labels.triggered.connect(self._export_labels_csv)
+        self._action_export_labels.setEnabled(False)
+        csv_export_menu.addAction(self._action_export_labels)
+        self._action_export_both = QAction("両方エクスポート...", self)
+        self._action_export_both.triggered.connect(self._export_both_csv)
+        self._action_export_both.setEnabled(False)
+        csv_export_menu.addAction(self._action_export_both)
         file_menu.addMenu(csv_export_menu)
+
+        csv_import_menu = QMenu("CSVインポート", self)
+        self._action_import_toc = QAction("目次をインポート...", self)
+        self._action_import_toc.triggered.connect(self._import_toc_csv)
+        self._action_import_toc.setEnabled(False)
+        csv_import_menu.addAction(self._action_import_toc)
+        self._action_import_labels = QAction("ページラベルをインポート...", self)
+        self._action_import_labels.triggered.connect(self._import_labels_csv)
+        self._action_import_labels.setEnabled(False)
+        csv_import_menu.addAction(self._action_import_labels)
+        file_menu.addMenu(csv_import_menu)
 
         file_menu.addSeparator()
 
@@ -215,6 +229,10 @@ class MainWindow(QMainWindow):
         self._page_label_panel.load(self._doc)
         self._btn_select_mode.setEnabled(True)
         self._page_input.setEnabled(True)
+        for action in (self._action_export_toc, self._action_export_labels,
+                       self._action_export_both, self._action_import_toc,
+                       self._action_import_labels):
+            action.setEnabled(True)
 
         self._unsaved = False
         self._update_title()
@@ -278,6 +296,16 @@ class MainWindow(QMainWindow):
             return
         self._toc_panel._export_csv()
         self._page_label_panel._export_csv()
+
+    def _import_toc_csv(self) -> None:
+        if not self._doc.is_open:
+            return
+        self._toc_panel._import_csv()
+
+    def _import_labels_csv(self) -> None:
+        if not self._doc.is_open:
+            return
+        self._page_label_panel._import_csv()
 
     # ------------------------------------------------------------------
     # テキスト選択モード

@@ -198,9 +198,23 @@ class PdfDocument:
                 self._doc.save(str(target), incremental=True, encryption=fitz.PDF_ENCRYPT_KEEP)
             except Exception:
                 # 修復済みPDFなどインクリメンタル書き込み不可の場合はフルリライト
-                import tempfile, shutil, os
-                tmp = Path(tempfile.mktemp(suffix=".pdf", dir=target.parent))
-                self._doc.save(str(tmp))
-                shutil.move(str(tmp), str(target))
+                self._full_rewrite(target)
         else:
-            self._doc.save(str(target))
+            self._full_rewrite(target)
+
+    def _full_rewrite(self, target: Path) -> None:
+        """一時ファイル経由でアトミックにフルリライトする。
+        garbage=4 で xref を完全再構築し、破損を引き継がない。
+        """
+        import tempfile, os
+        fd, tmp_path = tempfile.mkstemp(suffix=".pdf", dir=target.parent)
+        os.close(fd)
+        try:
+            self._doc.save(tmp_path, garbage=4, clean=True)
+            os.replace(tmp_path, str(target))  # POSIX ではアトミック
+        except Exception:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise

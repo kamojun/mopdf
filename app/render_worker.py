@@ -23,13 +23,20 @@ class RenderWorker(QRunnable):
     def run(self) -> None:
         if self._cancel.is_set():
             return
-        doc = fitz.open(self._path)
         try:
+            doc = fitz.open(self._path)
+        except Exception:
+            return
+        try:
+            if self._page_index >= doc.page_count:
+                return
             page = doc[self._page_index]
             mat = fitz.Matrix(self._zoom, self._zoom)
             pix = page.get_pixmap(matrix=mat, alpha=False)
             img = QImage(pix.samples, pix.width, pix.height,
                          pix.stride, QImage.Format.Format_RGB888).copy()
+        except Exception:
+            return
         finally:
             doc.close()
         if not self._cancel.is_set():

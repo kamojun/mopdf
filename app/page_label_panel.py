@@ -39,6 +39,7 @@ class PageLabelDelegate(QStyledItemDelegate):
             return sb
         if col == COL_STYLE:
             cb = QComboBox(parent)
+            cb.setAutoFillBackground(True)
             for code in STYLE_ORDER:
                 cb.addItem(STYLE_LABELS[code], code)
             return cb

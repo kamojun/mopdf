@@ -104,10 +104,8 @@ class TocPanel(QWidget):
         self._btn_down   = self._make_btn("↓", "下へ移動")
         self._btn_left   = self._make_btn("←", "階層を上げる")
         self._btn_right  = self._make_btn("→", "階層を下げる")
-        self._btn_csv    = self._make_btn("CSV", "CSVファイルから読み込む")
-
         for btn in [self._btn_add, self._btn_del, self._btn_up,
-                    self._btn_down, self._btn_left, self._btn_right, self._btn_csv]:
+                    self._btn_down, self._btn_left, self._btn_right]:
             tb_layout.addWidget(btn)
         tb_layout.addStretch()
         layout.addWidget(toolbar)
@@ -154,7 +152,6 @@ class TocPanel(QWidget):
         self._btn_down.clicked.connect(self._move_down)
         self._btn_left.clicked.connect(self._indent_left)
         self._btn_right.clicked.connect(self._indent_right)
-        self._btn_csv.clicked.connect(self._import_csv)
 
         self._tree.itemSelectionChanged.connect(self._update_button_states)
         self._update_button_states()
@@ -407,6 +404,40 @@ class TocPanel(QWidget):
         self._tree.setCurrentItem(item)
         self._emit_modified()
 
+    def export_csv(self, path: str) -> None:
+        """目次をCSVファイルに書き出す。"""
+        toc = self.get_toc()
+        has_labels = self._doc is not None and bool(self._doc.get_page_labels())
+        with open(path, "w", newline="", encoding="utf-8-sig") as f:
+            writer = csv.writer(f)
+            writer.writerow(["level", "title", "page"])
+            for entry in toc:
+                writer.writerow([entry.level, entry.title,
+                                  self._page_str_for_export(entry.page, has_labels)])
+
+    def _page_str_for_export(self, page: int, has_labels: bool) -> str:
+        """0-indexed物理ページ番号をCSV用のページ文字列に変換する。"""
+        if not has_labels:
+            return str(page + 1)
+        label = self._doc.get_page_label_for(page)
+        if label:
+            return label
+        return f"({page + 1})"
+
+    def _export_csv(self) -> None:
+        default = ""
+        if self._doc is not None and self._doc.path is not None:
+            default = str(self._doc.path.with_suffix("")) + "_toc.csv"
+        path, _ = QFileDialog.getSaveFileName(
+            self, "目次をCSVに保存", default, "CSV Files (*.csv);;All Files (*)"
+        )
+        if not path:
+            return
+        try:
+            self.export_csv(path)
+        except Exception as e:
+            QMessageBox.critical(self, "CSVエラー", f"書き出しに失敗しました:\n{e}")
+
     def _import_csv(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
             self, "CSVファイルを開く", "", "CSV Files (*.csv);;All Files (*)"
@@ -511,7 +542,6 @@ class TocPanel(QWidget):
         self._btn_down.setEnabled(has_sel)
         self._btn_left.setEnabled(has_sel)
         self._btn_right.setEnabled(has_sel)
-        self._btn_csv.setEnabled(has_doc)
 
     # ------------------------------------------------------------------
     # ユーティリティ

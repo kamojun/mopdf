@@ -1,11 +1,11 @@
 from __future__ import annotations
 from pathlib import Path
 from typing import Optional
-from PySide6.QtCore import Qt, QSize
+from PySide6.QtCore import Qt, QSize, QSettings
 from PySide6.QtGui import QAction, QDragEnterEvent, QDropEvent
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QSplitter, QFileDialog,
-    QStatusBar, QLabel, QMessageBox, QToolBar, QPushButton, QLineEdit
+    QStatusBar, QLabel, QMessageBox, QToolBar, QPushButton, QLineEdit, QMenu
 )
 
 from .pdf_document import PdfDocument
@@ -15,12 +15,16 @@ from .page_label_panel import PageLabelPanel
 
 
 class MainWindow(QMainWindow):
+    _MAX_RECENT = 10
+
     def __init__(self) -> None:
         super().__init__()
         self._doc = PdfDocument()
         self._unsaved = False
         self._current_page = 0
         self._pdf_filename: Optional[str] = None
+        self._settings = QSettings("mopdf", "mopdf")
+        self._recent_files: list[str] = self._settings.value("recentFiles", [], type=list)
 
         self._setup_ui()
         self._setup_menu()
@@ -72,6 +76,7 @@ class MainWindow(QMainWindow):
         self._toc_panel.toc_modified.connect(self._mark_unsaved)
         # ページラベル編集 → 即時反映 + 未保存フラグ
         self._page_label_panel.page_labels_modified.connect(self._on_page_labels_modified)
+        self._page_label_panel.page_jump_requested.connect(self._viewer.scroll_to_page)
 
         # ビューアのページ変更 → TocPanel に現在ページを通知
         self._viewer.page_changed.connect(self._toc_panel.set_current_page)
@@ -107,6 +112,10 @@ class MainWindow(QMainWindow):
         open_action.triggered.connect(self._open_file_dialog)
         file_menu.addAction(open_action)
 
+        self._recent_menu = QMenu("最近使ったファイル", self)
+        file_menu.addMenu(self._recent_menu)
+        self._update_recent_menu()
+
         file_menu.addSeparator()
 
         save_action = QAction("保存", self)
@@ -118,6 +127,20 @@ class MainWindow(QMainWindow):
         save_as_action.setShortcut("Ctrl+Shift+S")
         save_as_action.triggered.connect(self._save_as)
         file_menu.addAction(save_as_action)
+
+        file_menu.addSeparator()
+
+        csv_export_menu = QMenu("CSVエクスポート", self)
+        export_toc_action = QAction("目次をエクスポート...", self)
+        export_toc_action.triggered.connect(self._export_toc_csv)
+        csv_export_menu.addAction(export_toc_action)
+        export_labels_action = QAction("ページラベルをエクスポート...", self)
+        export_labels_action.triggered.connect(self._export_labels_csv)
+        csv_export_menu.addAction(export_labels_action)
+        export_both_action = QAction("両方エクスポート...", self)
+        export_both_action.triggered.connect(self._export_both_csv)
+        csv_export_menu.addAction(export_both_action)
+        file_menu.addMenu(csv_export_menu)
 
         file_menu.addSeparator()
 
@@ -139,6 +162,45 @@ class MainWindow(QMainWindow):
         if path:
             self.open_pdf(path)
 
+    def _add_to_recent(self, path: str) -> None:
+        abspath = str(Path(path).resolve())
+        if abspath in self._recent_files:
+            self._recent_files.remove(abspath)
+        self._recent_files.insert(0, abspath)
+        self._recent_files = self._recent_files[:self._MAX_RECENT]
+        self._settings.setValue("recentFiles", self._recent_files)
+        self._update_recent_menu()
+
+    def _update_recent_menu(self) -> None:
+        self._recent_menu.clear()
+        existing = [p for p in self._recent_files if Path(p).exists()]
+        if not existing:
+            no_action = QAction("（履歴なし）", self)
+            no_action.setEnabled(False)
+            self._recent_menu.addAction(no_action)
+            return
+        for i, path in enumerate(existing):
+            label = f"&{i + 1}  {Path(path).name}  [{path}]" if i < 9 else f"   {Path(path).name}  [{path}]"
+            action = QAction(label, self)
+            action.setData(path)
+            action.triggered.connect(self._open_recent)
+            self._recent_menu.addAction(action)
+
+    def _open_recent(self) -> None:
+        action = self.sender()
+        if not isinstance(action, QAction):
+            return
+        path = action.data()
+        if not Path(path).exists():
+            QMessageBox.warning(self, "ファイルが見つかりません", f"ファイルが見つかりません:\n{path}")
+            self._recent_files = [p for p in self._recent_files if p != path]
+            self._settings.setValue("recentFiles", self._recent_files)
+            self._update_recent_menu()
+            return
+        if not self._confirm_discard():
+            return
+        self.open_pdf(path)
+
     def open_pdf(self, path: str) -> None:
         try:
             self._doc.open(path)
@@ -146,6 +208,7 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "エラー", f"PDFを開けませんでした:\n{e}")
             return
 
+        self._add_to_recent(path)
         self._pdf_filename = Path(path).name
         self._viewer.load(self._doc)
         self._toc_panel.load(self._doc)
@@ -195,6 +258,26 @@ class MainWindow(QMainWindow):
             return
         # 保存先を新しいファイルとして開き直す
         self.open_pdf(path)
+
+    # ------------------------------------------------------------------
+    # CSVエクスポート
+    # ------------------------------------------------------------------
+
+    def _export_toc_csv(self) -> None:
+        if not self._doc.is_open:
+            return
+        self._toc_panel._export_csv()
+
+    def _export_labels_csv(self) -> None:
+        if not self._doc.is_open:
+            return
+        self._page_label_panel._export_csv()
+
+    def _export_both_csv(self) -> None:
+        if not self._doc.is_open:
+            return
+        self._toc_panel._export_csv()
+        self._page_label_panel._export_csv()
 
     # ------------------------------------------------------------------
     # テキスト選択モード

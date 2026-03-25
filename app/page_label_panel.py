@@ -1,12 +1,14 @@
 from __future__ import annotations
+import csv
 from typing import Optional
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, Signal, QEvent
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QTableWidget, QTableWidgetItem,
     QLabel, QHeaderView, QPushButton, QSpinBox, QComboBox, QLineEdit,
-    QStyledItemDelegate, QStyleOptionViewItem,
+    QStyledItemDelegate, QStyleOptionViewItem, QStyle, QFileDialog, QMessageBox,
 )
 from PySide6.QtCore import QModelIndex
+from PySide6.QtGui import QPainter
 
 from .pdf_document import PdfDocument, PageLabelRange, STYLE_LABELS
 
@@ -62,6 +64,11 @@ class PageLabelDelegate(QStyledItemDelegate):
         elif col == COL_FIRST and isinstance(editor, QSpinBox):
             editor.setValue(raw if raw is not None else 1)
 
+    def paint(self, painter: QPainter, option: QStyleOptionViewItem, index: QModelIndex) -> None:
+        if option.state & QStyle.StateFlag.State_Editing:
+            return
+        super().paint(painter, option, index)
+
     def setModelData(self, editor: QWidget, model, index: QModelIndex) -> None:
         col = index.column()
         if col == COL_START and isinstance(editor, QSpinBox):
@@ -82,6 +89,7 @@ class PageLabelDelegate(QStyledItemDelegate):
 
 class PageLabelPanel(QWidget):
     page_labels_modified = Signal()
+    page_jump_requested = Signal(int)  # 0-indexed physical page
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
@@ -130,6 +138,8 @@ class PageLabelPanel(QWidget):
         self._btn_add.clicked.connect(self._add_range)
         self._btn_del.clicked.connect(self._delete_range)
         self._table.itemChanged.connect(self._on_item_changed)
+        self._table.cellClicked.connect(self._on_cell_clicked)
+        self._table.installEventFilter(self)
 
     def load(self, doc: PdfDocument) -> None:
         self._doc = doc
@@ -208,6 +218,29 @@ class PageLabelPanel(QWidget):
         first_item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable | Qt.ItemFlag.ItemIsEditable)
         self._table.setItem(row, COL_FIRST, first_item)
 
+    def export_csv(self, path: str) -> None:
+        """ページラベルをCSVファイルに書き出す。"""
+        labels = self.get_page_labels()
+        with open(path, "w", newline="", encoding="utf-8-sig") as f:
+            writer = csv.writer(f)
+            writer.writerow(["start_page", "style", "prefix", "first_num"])
+            for r in labels:
+                writer.writerow([r.start_page + 1, r.style, r.prefix, r.first_num])
+
+    def _export_csv(self) -> None:
+        default = ""
+        if self._doc is not None and self._doc.path is not None:
+            default = str(self._doc.path.with_suffix("")) + "_pagelabels.csv"
+        path, _ = QFileDialog.getSaveFileName(
+            self, "ページラベルをCSVに保存", default, "CSV Files (*.csv);;All Files (*)"
+        )
+        if not path:
+            return
+        try:
+            self.export_csv(path)
+        except Exception as e:
+            QMessageBox.critical(self, "CSVエラー", f"書き出しに失敗しました:\n{e}")
+
     def _add_range(self) -> None:
         if self._doc is None:
             return
@@ -229,6 +262,22 @@ class PageLabelPanel(QWidget):
             self._table.removeRow(row)
         self._table.blockSignals(False)
         self.page_labels_modified.emit()
+
+    def eventFilter(self, obj, event) -> bool:
+        if obj is self._table and event.type() == QEvent.Type.KeyPress:
+            if event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
+                if not self._table.isPersistentEditorOpen(self._table.currentIndex()):
+                    self._delete_range()
+                    return True
+        return super().eventFilter(obj, event)
+
+    def _on_cell_clicked(self, row: int, col: int) -> None:
+        start_item = self._table.item(row, COL_START)
+        if start_item is None:
+            return
+        page = start_item.data(Qt.ItemDataRole.UserRole)
+        if page is not None:
+            self.page_jump_requested.emit(page)
 
     def _on_item_changed(self, item: QTableWidgetItem) -> None:
         self.page_labels_modified.emit()

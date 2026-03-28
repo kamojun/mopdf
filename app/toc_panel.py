@@ -8,7 +8,7 @@ from PySide6.QtGui import QKeySequence
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QTreeWidget, QTreeWidgetItem,
     QLabel, QPushButton, QAbstractItemView, QStyledItemDelegate,
-    QSpinBox, QLineEdit, QFileDialog, QMessageBox, QApplication,
+    QLineEdit, QFileDialog, QMessageBox, QApplication,
 )
 
 from .pdf_document import PdfDocument, TocEntry
@@ -36,31 +36,34 @@ class TitleDelegate(QStyledItemDelegate):
         return super().eventFilter(editor, event)
 
 
-class PageSpinDelegate(QStyledItemDelegate):
-    """ページ番号列のインライン編集をQSpinBoxで行うデリゲート"""
+class PageLineDelegate(QStyledItemDelegate):
+    """ページ番号列のインライン編集をQLineEditで行うデリゲート。
+    整数・論理ラベル・'?'（未設定）を受け付ける。"""
 
-    def __init__(self, get_page_count, parent=None):
+    def __init__(self, get_display_text, resolve_page, parent=None):
         super().__init__(parent)
-        self._get_page_count = get_page_count
+        self._get_display_text = get_display_text  # (page0: int | None) -> str
+        self._resolve_page = resolve_page           # (text: str) -> int | None
 
     def createEditor(self, parent, option, index):
-        editor = QSpinBox(parent)
-        editor.setMinimum(1)
-        editor.setMaximum(self._get_page_count())
+        editor = QLineEdit(parent)
         editor.setFrame(False)
         editor.setAlignment(Qt.AlignmentFlag.AlignRight)
-        editor.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
         return editor
 
     def setEditorData(self, editor, index):
-        # ページ数は列0の UserRole に格納されている
         page0 = index.sibling(index.row(), 0).data(Qt.ItemDataRole.UserRole)
-        if page0 is not None:
-            editor.setValue(page0 + 1)
+        editor.setText(self._get_display_text(page0))
+        editor.selectAll()
 
     def setModelData(self, editor, model, index):
-        value = editor.value() - 1  # 0-indexed に変換
-        model.setData(index, value, Qt.ItemDataRole.UserRole + 1)
+        text = editor.text().strip()
+        if text in ("?", ""):
+            page_val = -1  # sentinel: 未設定
+        else:
+            resolved = self._resolve_page(text)
+            page_val = resolved if resolved is not None else -1
+        model.setData(index, page_val, Qt.ItemDataRole.UserRole + 1)
 
     def updateEditorGeometry(self, editor, option, index):
         editor.setGeometry(option.rect)
@@ -135,7 +138,7 @@ class TocPanel(QWidget):
             )
         )
         self._tree.setItemDelegateForColumn(
-            1, PageSpinDelegate(lambda: self._doc.page_count if self._doc else 9999, self)
+            1, PageLineDelegate(self._get_page_display_text, self._resolve_page, self)
         )
 
         self._tree.itemClicked.connect(self._on_item_clicked)
@@ -189,8 +192,6 @@ class TocPanel(QWidget):
         def walk(item: QTreeWidgetItem, level: int) -> None:
             page = item.data(0, Qt.ItemDataRole.UserRole)
             title = item.text(0)
-            if page is None:
-                return
             result.append(TocEntry(level=level, title=title, page=page))
             for i in range(item.childCount()):
                 walk(item.child(i), level + 1)
@@ -232,7 +233,21 @@ class TocPanel(QWidget):
         self._tree.blockSignals(False)
         self._update_button_states()
 
-    def _make_item(self, title: str, page: int) -> QTreeWidgetItem:
+    def _get_page_display_text(self, page0: Optional[int]) -> str:
+        """0-indexed物理ページ番号またはNoneを表示文字列に変換する。
+        ページラベルが存在するドキュメントでラベルのないページは (n) 形式で表示する。"""
+        if page0 is None:
+            return "?"
+        if self._doc is None:
+            return str(page0 + 1)
+        label = self._doc.get_page_label_for(page0)
+        if label:
+            return label
+        if self._doc.get_page_labels():
+            return f"({page0 + 1})"
+        return str(page0 + 1)
+
+    def _make_item(self, title: str, page: Optional[int]) -> QTreeWidgetItem:
         item = QTreeWidgetItem()
         item.setText(0, title)
         item.setData(0, Qt.ItemDataRole.UserRole, page)
@@ -248,11 +263,8 @@ class TocPanel(QWidget):
 
     def _refresh_page_label(self, item: QTreeWidgetItem) -> None:
         page = item.data(0, Qt.ItemDataRole.UserRole)
-        if page is None or self._doc is None:
-            return
-        label = self._doc.get_page_label_for(page)
-        item.setText(1, label if label else str(page + 1))
         item.setTextAlignment(1, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        item.setText(1, self._get_page_display_text(page))
 
     # ------------------------------------------------------------------
     # アンドゥ
@@ -416,8 +428,10 @@ class TocPanel(QWidget):
                 writer.writerow([entry.level, entry.title,
                                   self._page_str_for_export(entry.page, has_labels)])
 
-    def _page_str_for_export(self, page: int, has_labels: bool) -> str:
-        """0-indexed物理ページ番号をCSV用のページ文字列に変換する。"""
+    def _page_str_for_export(self, page: Optional[int], has_labels: bool) -> str:
+        """0-indexed物理ページ番号またはNoneをCSV用のページ文字列に変換する。"""
+        if page is None:
+            return "?"
         if not has_labels:
             return str(page + 1)
         label = self._doc.get_page_label_for(page)
@@ -475,19 +489,18 @@ class TocPanel(QWidget):
             QMessageBox.warning(
                 self, "インポート警告",
                 "一部のページ番号を解決できませんでした。\n"
-                "フォールバックページを付与してインポートしました。\n\n"
+                "該当エントリを未設定（?）でインポートしました。\n\n"
                 + "\n".join(warnings)
                 + "\n\nUIで該当エントリを確認・修正してください。"
             )
 
     def _parse_csv_with_warnings(self, path: str) -> tuple[list[TocEntry], list[str]]:
         """CSV形式: level,title,page を読み込む。
-        page は論理ページラベル / (n)形式 / 整数（1-indexed物理）の3形式を受け付ける。
-        解決できないページはフォールバック（直前の成功ページまたは0）を使用し警告を返す。
+        page は論理ページラベル / (n)形式 / 整数（1-indexed物理）/ '?'（未設定）を受け付ける。
+        解決できないページは未設定としてロードし警告を返す。
         """
         entries: list[TocEntry] = []
         warnings: list[str] = []
-        fallback_page = 0  # 直前の成功エントリのページ（0-indexed）
 
         with open(path, newline="", encoding="utf-8-sig") as f:
             reader = csv.reader(f)
@@ -508,22 +521,19 @@ class TocPanel(QWidget):
                 page_str = row[2].strip()
 
                 # ページ解決
-                page0 = self._resolve_page(page_str)
-                if page0 is None:
-                    warnings.append(
-                        f"行{row_num}: ページ '{page_str}' が見つかりません"
-                        f"（フォールバック: {fallback_page + 1} ページ目を使用）"
-                    )
-                    page0 = fallback_page
+                if page_str == "?":
+                    page0: Optional[int] = None
                 else:
-                    if self._doc is not None and page0 >= self._doc.page_count:
+                    page0 = self._resolve_page(page_str)
+                    if page0 is None:
+                        warnings.append(f"行{row_num}: ページ '{page_str}' が見つかりません（未設定でロード）")
+                    elif self._doc is not None and page0 >= self._doc.page_count:
                         clamped = self._doc.page_count - 1
                         warnings.append(
                             f"行{row_num}: ページ {page0 + 1} は範囲外です"
                             f"（最終ページ {self._doc.page_count} を使用）"
                         )
                         page0 = clamped
-                    fallback_page = page0
 
                 entries.append(TocEntry(level=level, title=title, page=page0))
 
@@ -574,7 +584,7 @@ class TocPanel(QWidget):
             # SpinBoxデリゲートがUserRole+1に列1として書いた値を読み、列0のUserRole(ページ)に反映
             page = item.data(1, Qt.ItemDataRole.UserRole + 1)
             if page is not None:
-                item.setData(0, Qt.ItemDataRole.UserRole, page)
+                item.setData(0, Qt.ItemDataRole.UserRole, None if page == -1 else page)
                 item.setData(1, Qt.ItemDataRole.UserRole + 1, None)
             self._refresh_page_label(item)
         self._emit_modified()

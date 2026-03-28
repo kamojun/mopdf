@@ -10,7 +10,7 @@ from PySide6.QtGui import QImage
 class TocEntry:
     level: int          # 1=章, 2=節, 3=小節 ...
     title: str
-    page: int           # 0-indexed 物理ページ番号
+    page: Optional[int]  # 0-indexed 物理ページ番号。None = 未設定
     dest: dict = field(default_factory=dict)  # PyMuPDF destination info
 
 
@@ -88,6 +88,8 @@ class PdfDocument:
             return
         raw = []
         for e in entries:
+            if e.page is None:
+                continue  # 未設定のエントリはPDFに書き込まない
             dest = e.dest if e.dest else {"kind": fitz.LINK_GOTO, "page": e.page, "to": fitz.Point(0, 0)}
             raw.append([e.level, e.title, e.page + 1, dest])
         self._doc.set_toc(raw)

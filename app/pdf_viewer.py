@@ -114,7 +114,7 @@ class PdfViewer(QScrollArea):
         super().__init__(parent)
         self._doc: Optional[PdfDocument] = None
         self._zoom: float = 1.5
-        self._page_widgets: list[QWidget] = []  # QWidget (placeholder) or PageWidget
+        self._page_widgets: list[PageWidget] = []
         self._page_sizes: list[tuple[int, int]] = []
         self._rendered: set[int] = set()
         self._select_mode: bool = False
@@ -126,7 +126,6 @@ class PdfViewer(QScrollArea):
 
         self._container = QWidget()
         self._layout = QVBoxLayout(self._container)
-        self._layout.setAlignment(Qt.AlignmentFlag.AlignHCenter)
         self._layout.setSpacing(0)
         self._layout.setContentsMargins(0, 0, 0, 0)
 
@@ -161,8 +160,7 @@ class PdfViewer(QScrollArea):
     def set_select_mode(self, enabled: bool) -> None:
         self._select_mode = enabled
         for pw in self._page_widgets:
-            if isinstance(pw, PageWidget):
-                pw.set_select_mode(enabled)
+            pw.set_select_mode(enabled)
 
     def refresh_page_labels(self) -> None:
         """ページラベル表示を再描画する（ドキュメントのラベルが更新された後に呼ぶ）。"""
@@ -187,30 +185,19 @@ class PdfViewer(QScrollArea):
         # 全ページサイズを一括取得（PyMuPDFを1パスで回す）
         self._page_sizes = self._doc.get_all_page_sizes(self._zoom)
 
-        # 軽量プレースホルダーを生成（PageWidget は必要になるまで作らない）
-        for w, h in self._page_sizes:
-            ph = QWidget()
-            ph.setFixedSize(w, h)
-            ph.setStyleSheet("background: #e0e0e0; border: 1px solid #ccc; margin: 8px;")
-            self._layout.addWidget(ph)
-            self._page_widgets.append(ph)
+        # PageWidget を直接生成（初期状態はpixmap未設定の灰色）
+        assert self._doc is not None
+        for i, (w, h) in enumerate(self._page_sizes):
+            pw = PageWidget(i, w, h, self._doc, self._zoom)
+            pw.set_select_mode(self._select_mode)
+            pw.text_selected.connect(self.text_selected)
+            self._layout.addWidget(pw, 0, Qt.AlignmentFlag.AlignHCenter)
+            self._page_widgets.append(pw)
 
         QTimer.singleShot(0, self._render_visible)
 
     def _ensure_page_widget(self, i: int) -> PageWidget:
-        """プレースホルダーを PageWidget に昇格させる（既に昇格済みならそのまま返す）。"""
-        widget = self._page_widgets[i]
-        if isinstance(widget, PageWidget):
-            return widget
-        assert self._doc is not None
-        w, h = self._page_sizes[i]
-        pw = PageWidget(i, w, h, self._doc, self._zoom)
-        pw.set_select_mode(self._select_mode)
-        pw.text_selected.connect(self.text_selected)
-        self._layout.replaceWidget(widget, pw)
-        widget.deleteLater()
-        self._page_widgets[i] = pw
-        return pw
+        return self._page_widgets[i]  # type: ignore[return-value]
 
     def _clear_pages(self) -> None:
         for pw in self._page_widgets:

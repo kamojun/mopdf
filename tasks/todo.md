@@ -30,8 +30,8 @@
 
 - [x] 200ページPDFのロード遅延改善（3秒→大幅短縮）
   - `get_all_page_sizes()` で全ページサイズを1パスで取得
-  - `_rebuild()` で軽量 `QWidget` プレースホルダーを生成（PageWidget は不要）
-  - スクロール時に `_ensure_page_widget()` で必要分だけ PageWidget に昇格
+  - `_rebuild()` で全ページを `PageWidget` として直接生成（load: ~0.07s）
+  - 代替案メモ: 軽量 `QWidget` プレースホルダー方式（load: ~0.03s、メモリ効率↑）もあり。ページ数が増えたときの選択肢として。
 - [x] レンダリング非同期化（UIスレッドフリーズ解消）
   - `app/render_worker.py` を新規作成（`QRunnable` + `QThreadPool`）
   - `_render_visible()` を非同期版に置き換え（`RenderWorker` をキューに投入）

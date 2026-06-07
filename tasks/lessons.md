@@ -1,5 +1,14 @@
 # 学びの記録
 
+## 2026-06-07
+
+### QVBoxLayout.setAlignment(AlignHCenter) はサイズ不揃いの大量ウィジェットでレイアウトを壊す
+
+- **状況**: 「表紙の表示位置がおかしい。最初に下にスクロールしないと何も出てこない」というバグ。527ページPDFで調査したところ、1ページ目のウィジェットが本来 `y=0` のはずが `y≈63355`（コンテナ高650,997pxの中央寄せ位置）に配置されていた。連続ページ間の間隔が常に約995pxの定数になっており、各ページ本来の高さ（1140〜1340px）と無関係だった
+- **原因**: `self._layout.setAlignment(Qt.AlignmentFlag.AlignHCenter)` を `QVBoxLayout` 自体に設定すると、Qt は子の実際の `setFixedSize` を無視して「コンテナ高 ÷ 項目数」の均等割り高さで配置を計算し、さらにその塊を上下中央寄せしてしまう（PySide6/Qt6 の実機検証で確認）
+- **修正**: レイアウト全体ではなく、`addWidget(pw, 0, Qt.AlignmentFlag.AlignHCenter)` で個々のウィジェットに対して水平中央寄せを指定する
+- **ルール**: `QVBoxLayout`/`QHBoxLayout` に大量のサイズ不揃いウィジェットを積む場合、`layout.setAlignment()` は使わず `addWidget(widget, stretch, alignment)` の第3引数で個別指定する。レイアウト全体への `setAlignment` は「項目数が少ない」「サイズが揃っている」場合は問題にならないため気づきにくい
+
 ## 2026-03-21
 
 ### Qt のキーイベントでモディファイアチェックは & を使う

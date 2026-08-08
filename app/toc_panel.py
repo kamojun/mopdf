@@ -541,12 +541,14 @@ class TocPanel(QWidget):
 
     def _resolve_page(self, page_str: str) -> Optional[int]:
         """ページ文字列を0-indexed物理ページ番号に解決する。解決不能な場合はNoneを返す。"""
-        # パターン1: 整数のみ → 1-indexed物理ページ
-        try:
-            n = int(page_str)
-            return max(0, n - 1)
-        except ValueError:
-            pass
+        # パターン1: 論理ページラベルに一致するものを優先的に探す。
+        # ローマ数字の前付けなどページラベルが混在するPDFでは、
+        # 入力した数字を物理ページ番号として即決めてしまうと
+        # 別のラベル体系のページを指してしまうため、まずラベル一致を試みる。
+        if self._doc is not None:
+            result = self._doc.find_page_by_label(page_str)
+            if result >= 0:
+                return result
 
         # パターン2: (n)形式 → 1-indexed物理ページ
         m = re.match(r'^\((\d+)\)$', page_str)
@@ -554,11 +556,12 @@ class TocPanel(QWidget):
             n = int(m.group(1))
             return max(0, n - 1)
 
-        # パターン3: 論理ページラベル
-        if self._doc is not None:
-            result = self._doc.find_page_by_label(page_str)
-            if result >= 0:
-                return result
+        # パターン3: 整数のみ → 1-indexed物理ページ（ラベルに一致しない場合のフォールバック）
+        try:
+            n = int(page_str)
+            return max(0, n - 1)
+        except ValueError:
+            pass
 
         return None
 

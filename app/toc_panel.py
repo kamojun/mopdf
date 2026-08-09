@@ -3,7 +3,7 @@ import csv
 import io
 import re
 from typing import Optional
-from PySide6.QtCore import Qt, Signal, QModelIndex, QTimer, QEvent
+from PySide6.QtCore import Qt, Signal, QModelIndex, QTimer, QEvent, QItemSelectionModel
 from PySide6.QtGui import QKeySequence, QDragEnterEvent, QDropEvent
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QTreeWidget, QTreeWidgetItem,
@@ -167,7 +167,7 @@ class TocPanel(QWidget):
         tb_layout.addStretch()
         layout.addWidget(toolbar)
 
-        # ツリー（Shift+矢印でボタン操作と同等のショートカット）
+        # ツリー（Shift+矢印: 複数選択, Cmd/Ctrl+矢印: 並び替え・階層変更, Alt+↑/↓: ページ表示追従）
         self._tree = self._make_tree()
         self._tree.setHeaderHidden(True)
         self._tree.setColumnCount(2)
@@ -397,43 +397,46 @@ class TocPanel(QWidget):
         else:
             self._tree.takeTopLevelItem(self._tree.indexOfTopLevelItem(item))
 
-    def _move_up(self) -> None:
-        item = self._tree.currentItem()
-        if item is None:
+    def _container_ops(self, parent: Optional[QTreeWidgetItem]):
+        """親アイテム（またはトップレベルなら`None`）に応じて、子リスト操作用の
+        (件数取得, インデックス取得, 取り出し, 挿入) の4関数を返す。"""
+        if parent is not None:
+            return parent.childCount, parent.indexOfChild, parent.takeChild, parent.insertChild
+        return (self._tree.topLevelItemCount, self._tree.indexOfTopLevelItem,
+                self._tree.takeTopLevelItem, self._tree.insertTopLevelItem)
+
+    def _move_selected(self, delta: int) -> None:
+        """選択中のルート項目を親ごとにまとめ、塊として1段ずつ上下に動かす。
+        delta=-1で上, +1で下。"""
+        roots = self._selected_root_items()
+        if not roots:
             return
         self._push_history()
-        parent = item.parent()
-        if parent:
-            idx = parent.indexOfChild(item)
-            if idx > 0:
-                parent.takeChild(idx)
-                parent.insertChild(idx - 1, item)
-        else:
-            idx = self._tree.indexOfTopLevelItem(item)
-            if idx > 0:
-                self._tree.takeTopLevelItem(idx)
-                self._tree.insertTopLevelItem(idx - 1, item)
-        self._tree.setCurrentItem(item)
+        groups: dict[Optional[QTreeWidgetItem], list[QTreeWidgetItem]] = {}
+        for item in roots:
+            groups.setdefault(item.parent(), []).append(item)
+        for parent, items in groups.items():
+            count_fn, index_of, take, insert = self._container_ops(parent)
+            ordered = items if delta < 0 else list(reversed(items))
+            boundary = -1 if delta < 0 else count_fn()
+            for item in ordered:
+                idx = index_of(item)
+                target = idx + delta
+                moves = target > boundary if delta < 0 else target < boundary
+                if moves:
+                    take(idx)
+                    insert(target, item)
+                    boundary = target
+                else:
+                    boundary = idx
+        self._select_items(roots)
         self._emit_modified()
 
+    def _move_up(self) -> None:
+        self._move_selected(-1)
+
     def _move_down(self) -> None:
-        item = self._tree.currentItem()
-        if item is None:
-            return
-        self._push_history()
-        parent = item.parent()
-        if parent:
-            idx = parent.indexOfChild(item)
-            if idx < parent.childCount() - 1:
-                parent.takeChild(idx)
-                parent.insertChild(idx + 1, item)
-        else:
-            idx = self._tree.indexOfTopLevelItem(item)
-            if idx < self._tree.topLevelItemCount() - 1:
-                self._tree.takeTopLevelItem(idx)
-                self._tree.insertTopLevelItem(idx + 1, item)
-        self._tree.setCurrentItem(item)
-        self._emit_modified()
+        self._move_selected(1)
 
     def _selected_root_items(self) -> list[QTreeWidgetItem]:
         """選択中のアイテムのうち、祖先も選択されているものを除いた「ルート」のみを
@@ -468,7 +471,9 @@ class TocPanel(QWidget):
         for item in items:
             item.setSelected(True)
         if items:
-            self._tree.setCurrentItem(items[-1])
+            # setCurrentItem()の既定動作は、ツリーがフォーカスを持つ状態だと選択を
+            # currentItemの1件だけに潰してしまう。NoUpdateで直前のselectedを維持する。
+            self._tree.setCurrentItem(items[-1], 0, QItemSelectionModel.SelectionFlag.NoUpdate)
 
     def _indent_left(self) -> None:
         """選択中の項目を1段上の階層に移動する（親の兄弟になる）。
@@ -865,8 +870,9 @@ class TocPanel(QWidget):
                 QTreeWidget.keyPressEvent(tree, event); return
             if event.matches(QKeySequence.StandardKey.Undo):
                 self._undo(); return
-            if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
-                key = event.key()
+            mods = event.modifiers()
+            key = event.key()
+            if mods & Qt.KeyboardModifier.ControlModifier:
                 if key == Qt.Key.Key_Up:
                     self._move_up(); return
                 if key == Qt.Key.Key_Down:
@@ -875,15 +881,23 @@ class TocPanel(QWidget):
                     self._indent_left(); return
                 if key == Qt.Key.Key_Right:
                     self._indent_right(); return
-                if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
-                    self._add_entry(before=True); return
-            elif event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            if mods & Qt.KeyboardModifier.AltModifier and key in (Qt.Key.Key_Up, Qt.Key.Key_Down):
+                QTreeWidget.keyPressEvent(tree, event)
+                item = tree.currentItem()
+                if item is not None:
+                    page = item.data(0, Qt.ItemDataRole.UserRole)
+                    if page is not None:
+                        self.page_jump_requested.emit(page)
+                return
+            if mods & Qt.KeyboardModifier.ShiftModifier and key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+                self._add_entry(before=True); return
+            if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
                 item = tree.currentItem()
                 if item is not None:
                     self._push_history()
                     tree.editItem(item, 1 if self._page_edit_mode else 0)
                     return
-            elif event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
+            if key in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
                 if tree.currentItem() is not None:
                     self._delete_entry()
                     return

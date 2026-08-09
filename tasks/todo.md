@@ -99,3 +99,12 @@
   3. クリック直後に別項目へ選択が移る→古い保留ジャンプは破棄され、新しい項目のみ後でジャンプする
   4. クリック直後に「#」連続入力モードを起動→ジャンプが起きない
   5. 既存の連続入力モード（Enter連続移動・増分提案）に回帰がないことを再確認
+
+## 目次ツリーの矢印キー修飾子を再設計 ✅
+
+**背景**: Shift+矢印が「並び替え・階層変更」に割り当てられていたが、ツリーは既に`ExtendedSelection`モードであり、Shift+矢印はQtの標準慣習では「複数選択の範囲拡張」であるべきという指摘から再設計。役割分担をShift=複数選択、Cmd(Ctrl)=編集操作、Alt+↑/↓=ページ表示追従に変更。
+
+- [x] `_move_up`/`_move_down`を`_move_selected(delta)`に統合し、`_indent_left`/`_indent_right`と同様に複数選択（`_selected_root_items()`）に対応。親ごとにグループ化し、境界(boundary)を追跡しながら塊として1段ずつ動かすアルゴリズムを追加（新規ヘルパー`_container_ops(parent)`でQTreeWidgetItemとQTreeWidgetトップレベルのメソッド差異を吸収）
+- [x] `keyPressEvent`: Shiftブロックを削除しネイティブの範囲選択・展開折りたたみに委譲。Ctrlブロックを新設し並び替え・階層変更（Up/Down/Left/Right）を割り当て。Altブロックを新設し、Up/Downでネイティブ移動後に`page_jump_requested`を直接emit。Shift+Enter（挿入）のみ維持
+- [x] **既存バグを発見・修正**: `_select_items`の末尾`setCurrentItem(items[-1])`が、ツリーがフォーカスを持つ状態では複数選択を1件に潰してしまう（Qtの既定挙動）。`QItemSelectionModel.SelectionFlag.NoUpdate`を渡すよう修正し、`_indent_left`/`_indent_right`の複数選択後の選択保持も合わせて直った
+- [x] 実GUI（`PySide6.QtTest`で実キー入力、`QT_QPA_PLATFORM=offscreen`）で以下を確認: 無修飾矢印はジャンプなし / Alt+↑↓はカーソル移動+ジャンプ / Shift+↑↓は範囲選択のみで並び替えなし / Ctrl+↑↓は複数選択を親ごとに独立して一括移動（境界での停止、親をまたぐ場合の独立動作を含む）/ Ctrl+←→で階層変更 / Shift+Enterの挿入維持 / Ctrl+Zでundo

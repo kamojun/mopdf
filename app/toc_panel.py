@@ -94,12 +94,14 @@ class TocPanel(QWidget):
 
     _MAX_HISTORY = 50
     _NO_SUGGESTION = -1  # 増分スピンボックスの最小値: 提案を出さない(OFF)
+    _JUMP_DELAY_MS = 200  # クリック時のページジャンプを遅らせる時間(ダブルクリック判定待ち)
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self._doc: Optional[PdfDocument] = None
         self._current_page: int = 0     # MainWindowから更新される
         self._pending_item: Optional[QTreeWidgetItem] = None  # 追加直後・未確定のアイテム
+        self._pending_jump_item: Optional[QTreeWidgetItem] = None  # ダブルクリック判定待ちのジャンプ
         self._page_edit_mode: bool = False  # ページ番号連続入力モード
         self._page_increment: int = 1       # 連続入力モードでEnterのみ押した際の加算ページ数
         self._pending_seq_seed: Optional[int] = None  # 次に開くエディタへの提案値(0-indexed)
@@ -217,6 +219,7 @@ class TocPanel(QWidget):
         self._spin_increment.valueChanged.connect(self._on_increment_changed)
 
         self._tree.itemSelectionChanged.connect(self._update_button_states)
+        self._tree.itemSelectionChanged.connect(self._cancel_stale_pending_jump)
         self._update_button_states()
 
     # ------------------------------------------------------------------
@@ -232,6 +235,7 @@ class TocPanel(QWidget):
         self._tree.clear()
         self._btn_page_mode.setChecked(False)
         self._pending_seq_seed = None
+        self._pending_jump_item = None
         self._update_button_states()
 
     def refresh_page_labels(self) -> None:
@@ -276,6 +280,7 @@ class TocPanel(QWidget):
         self._build_tree_from_entries(entries)
 
     def _build_tree_from_entries(self, entries: list[TocEntry]) -> None:
+        self._pending_jump_item = None
         self._tree.blockSignals(True)
         self._tree.clear()
         stack: list[QTreeWidgetItem] = []
@@ -733,11 +738,36 @@ class TocPanel(QWidget):
     # ------------------------------------------------------------------
 
     def _on_item_clicked(self, item: QTreeWidgetItem, column: int) -> None:
-        page = item.data(0, Qt.ItemDataRole.UserRole)
+        # ダブルクリック(編集開始)の前半である可能性があるため、少し待ってからジャンプする。
+        # その間に同じ項目が編集開始されたり、選択が別の項目に移ったりした場合は
+        # ジャンプをキャンセルする(_cancel_pending_jump系)。
+        self._pending_jump_item = item
+        QTimer.singleShot(
+            self._JUMP_DELAY_MS,
+            lambda: self._resolve_pending_jump(item),
+        )
+
+    def _resolve_pending_jump(self, item: QTreeWidgetItem) -> None:
+        if self._pending_jump_item is not item:
+            return
+        self._pending_jump_item = None
+        try:
+            page = item.data(0, Qt.ItemDataRole.UserRole)
+        except RuntimeError:
+            return  # 遅延中に項目が削除された
         if page is not None:
             self.page_jump_requested.emit(page)
 
+    def _cancel_pending_jump(self, item: Optional[QTreeWidgetItem] = None) -> None:
+        if item is None or self._pending_jump_item is item:
+            self._pending_jump_item = None
+
+    def _cancel_stale_pending_jump(self) -> None:
+        if self._pending_jump_item is not None and self._tree.currentItem() is not self._pending_jump_item:
+            self._pending_jump_item = None
+
     def _on_item_double_clicked(self, item: QTreeWidgetItem, column: int) -> None:
+        self._cancel_pending_jump(item)
         if column == 0:
             self._push_history()
             self._tree.editItem(item, 0)
@@ -755,6 +785,7 @@ class TocPanel(QWidget):
             item = self._tree.topLevelItem(0)
         if item is None:
             return
+        self._cancel_pending_jump(item)
         self._tree.setCurrentItem(item)
         self._push_history()
         self._tree.editItem(item, 1)

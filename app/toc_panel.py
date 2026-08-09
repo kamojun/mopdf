@@ -4,7 +4,7 @@ import io
 import re
 from typing import Optional
 from PySide6.QtCore import Qt, Signal, QModelIndex, QTimer, QEvent
-from PySide6.QtGui import QKeySequence
+from PySide6.QtGui import QKeySequence, QDragEnterEvent, QDropEvent
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QTreeWidget, QTreeWidgetItem,
     QLabel, QPushButton, QAbstractItemView, QStyledItemDelegate,
@@ -82,6 +82,7 @@ class TocPanel(QWidget):
         self._pending_item: Optional[QTreeWidgetItem] = None  # 追加直後・未確定のアイテム
         self._history: list[list[TocEntry]] = []
         self._staged_snapshot: Optional[list[TocEntry]] = None  # _add_entry用
+        self.setAcceptDrops(True)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -147,6 +148,7 @@ class TocPanel(QWidget):
         self._tree.model().rowsInserted.connect(self._emit_modified)
         self._tree.model().rowsRemoved.connect(self._emit_modified)
         self._tree.model().rowsMoved.connect(self._emit_modified)
+        self._tree.installEventFilter(self)
         layout.addWidget(self._tree)
 
         # ボタン接続
@@ -461,7 +463,9 @@ class TocPanel(QWidget):
         )
         if not path:
             return
+        self._import_csv_from_path(path)
 
+    def _import_csv_from_path(self, path: str) -> None:
         try:
             entries, warnings = self._parse_csv_with_warnings(path)
         except Exception as e:
@@ -538,6 +542,40 @@ class TocPanel(QWidget):
                 entries.append(TocEntry(level=level, title=title, page=page0))
 
         return entries, warnings
+
+    # ------------------------------------------------------------------
+    # ドラッグ&ドロップ（CSVインポート）
+    # ------------------------------------------------------------------
+
+    def dragEnterEvent(self, event: QDragEnterEvent) -> None:
+        if self._doc is None or self._pending_item is not None:
+            return
+        urls = event.mimeData().urls()
+        if urls and urls[0].toLocalFile().lower().endswith(".csv"):
+            event.acceptProposedAction()
+
+    def dropEvent(self, event: QDropEvent) -> None:
+        urls = event.mimeData().urls()
+        if urls:
+            self._import_csv_from_path(urls[0].toLocalFile())
+
+    def eventFilter(self, obj, event) -> bool:
+        # self._tree は InternalMove 用に WA_AcceptDrops が立っており、外部からの
+        # CSVファイルドロップがツリーに奪われて親に伝播しないため、ここで横取りする。
+        if obj is self._tree:
+            etype = event.type()
+            if etype in (QEvent.Type.DragEnter, QEvent.Type.DragMove):
+                urls = event.mimeData().urls()
+                if urls and urls[0].toLocalFile().lower().endswith(".csv"):
+                    if self._doc is not None and self._pending_item is None:
+                        event.acceptProposedAction()
+                    return True
+            elif etype == QEvent.Type.Drop:
+                urls = event.mimeData().urls()
+                if urls and urls[0].toLocalFile().lower().endswith(".csv"):
+                    self._import_csv_from_path(urls[0].toLocalFile())
+                    return True
+        return super().eventFilter(obj, event)
 
     def _resolve_page(self, page_str: str) -> Optional[int]:
         """ページ文字列を0-indexed物理ページ番号に解決する。解決不能な場合はNoneを返す。"""

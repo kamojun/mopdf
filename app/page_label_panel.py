@@ -8,7 +8,7 @@ from PySide6.QtWidgets import (
     QStyledItemDelegate, QStyleOptionViewItem, QStyle, QFileDialog, QMessageBox,
 )
 from PySide6.QtCore import QModelIndex
-from PySide6.QtGui import QPainter
+from PySide6.QtGui import QPainter, QDragEnterEvent, QDropEvent
 
 from .pdf_document import PdfDocument, PageLabelRange, STYLE_LABELS
 
@@ -95,6 +95,7 @@ class PageLabelPanel(QWidget):
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self._doc: Optional[PdfDocument] = None
+        self.setAcceptDrops(True)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -236,7 +237,9 @@ class PageLabelPanel(QWidget):
         )
         if not path:
             return
+        self._import_csv_from_path(path)
 
+    def _import_csv_from_path(self, path: str) -> None:
         try:
             ranges, warnings = self._parse_csv_with_warnings(path)
         except Exception as e:
@@ -323,6 +326,22 @@ class PageLabelPanel(QWidget):
                 ))
 
         return ranges, warnings
+
+    # ------------------------------------------------------------------
+    # ドラッグ&ドロップ（CSVインポート）
+    # ------------------------------------------------------------------
+
+    def dragEnterEvent(self, event: QDragEnterEvent) -> None:
+        if self._doc is None:
+            return
+        urls = event.mimeData().urls()
+        if urls and urls[0].toLocalFile().lower().endswith(".csv"):
+            event.acceptProposedAction()
+
+    def dropEvent(self, event: QDropEvent) -> None:
+        urls = event.mimeData().urls()
+        if urls:
+            self._import_csv_from_path(urls[0].toLocalFile())
 
     def _export_csv(self) -> None:
         default = ""

@@ -125,7 +125,7 @@ class TocPanel(QWidget):
         self._tree.header().setSectionResizeMode(1, self._tree.header().ResizeMode.ResizeToContents)
         self._tree.setAlternatingRowColors(True)
         self._tree.setIndentation(16)
-        self._tree.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self._tree.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self._tree.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
         self._tree.setDefaultDropAction(Qt.DropAction.MoveAction)
 
@@ -371,15 +371,58 @@ class TocPanel(QWidget):
         self._tree.setCurrentItem(item)
         self._emit_modified()
 
+    def _selected_root_items(self) -> list[QTreeWidgetItem]:
+        """選択中のアイテムのうち、祖先も選択されているものを除いた「ルート」のみを
+        ツリー表示順（上から下）で返す。祖先ごと動く子孫アイテムは個別に処理しない。"""
+        selected = self._tree.selectedItems()
+        selected_ids = {id(it) for it in selected}
+        roots = []
+        for item in selected:
+            node = item.parent()
+            while node is not None and id(node) not in selected_ids:
+                node = node.parent()
+            if node is None:
+                roots.append(item)
+        roots.sort(key=self._item_order_key)
+        return roots
+
+    def _item_order_key(self, item: QTreeWidgetItem) -> tuple[int, ...]:
+        """アイテムをツリー表示順（上から下）で比較できるパス表現を返す。"""
+        path = []
+        node = item
+        while node is not None:
+            parent = node.parent()
+            if parent:
+                path.append(parent.indexOfChild(node))
+            else:
+                path.append(self._tree.indexOfTopLevelItem(node))
+            node = parent
+        return tuple(reversed(path))
+
+    def _select_items(self, items: list[QTreeWidgetItem]) -> None:
+        self._tree.clearSelection()
+        for item in items:
+            item.setSelected(True)
+        if items:
+            self._tree.setCurrentItem(items[-1])
+
     def _indent_left(self) -> None:
-        """1段上の階層に移動（親の兄弟になる）"""
-        item = self._tree.currentItem()
-        if item is None:
-            return
+        """選択中の項目を1段上の階層に移動する（親の兄弟になる）。
+        複数選択時は各項目に適用する。"""
+        roots = [it for it in self._selected_root_items() if it.parent() is not None]
+        if not roots:
+            return  # 全てトップレベル
+        self._push_history()
+        # 兄弟同士の相対順序を保つため、下側の項目から処理する
+        for item in reversed(roots):
+            self._indent_left_single(item)
+        self._select_items(roots)
+        self._emit_modified()
+
+    def _indent_left_single(self, item: QTreeWidgetItem) -> None:
         parent = item.parent()
         if parent is None:
-            return  # 既にトップレベル
-        self._push_history()
+            return
         grandparent = parent.parent()
         idx_in_parent = parent.indexOfChild(item)
         parent.takeChild(idx_in_parent)
@@ -389,35 +432,39 @@ class TocPanel(QWidget):
         else:
             idx = self._tree.indexOfTopLevelItem(parent)
             self._tree.insertTopLevelItem(idx + 1, item)
-        self._tree.setCurrentItem(item)
-        self._emit_modified()
 
     def _indent_right(self) -> None:
-        """1段下の階層に移動（直前の兄弟の子になる）"""
-        item = self._tree.currentItem()
-        if item is None:
+        """選択中の項目を1段下の階層に移動する（直前の兄弟の子になる）。
+        複数選択時は各項目に適用する。"""
+        roots = self._selected_root_items()
+        movable = []
+        for item in roots:
+            parent = item.parent()
+            idx = parent.indexOfChild(item) if parent else self._tree.indexOfTopLevelItem(item)
+            if idx > 0:
+                movable.append(item)
+        if not movable:
             return
+        self._push_history()
+        # 前の兄弟を親にしていくため、上側の項目から処理する
+        for item in movable:
+            prev = self._indent_right_single(item)
+            prev.setExpanded(True)
+        self._select_items(movable)
+        self._emit_modified()
+
+    def _indent_right_single(self, item: QTreeWidgetItem) -> QTreeWidgetItem:
         parent = item.parent()
         if parent:
             idx = parent.indexOfChild(item)
-            if idx == 0:
-                return
-        else:
-            idx = self._tree.indexOfTopLevelItem(item)
-            if idx == 0:
-                return
-        self._push_history()
-        if parent:
             prev = parent.child(idx - 1)
             parent.takeChild(idx)
-            prev.addChild(item)
         else:
+            idx = self._tree.indexOfTopLevelItem(item)
             prev = self._tree.topLevelItem(idx - 1)
             self._tree.takeTopLevelItem(idx)
-            prev.addChild(item)
-        prev.setExpanded(True)
-        self._tree.setCurrentItem(item)
-        self._emit_modified()
+        prev.addChild(item)
+        return prev
 
     def export_csv(self, path: str) -> None:
         """目次をCSVファイルに書き出す。"""
@@ -654,7 +701,7 @@ class TocPanel(QWidget):
 
     def _update_button_states(self) -> None:
         has_doc = self._doc is not None
-        has_sel = self._tree.currentItem() is not None
+        has_sel = bool(self._tree.selectedItems())
         self._btn_add.setEnabled(has_doc)
         self._btn_del.setEnabled(has_sel)
         self._btn_up.setEnabled(has_sel)

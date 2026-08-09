@@ -43,3 +43,19 @@
 - [ ] PyInstallerでスタンドアローン.appにパッケージング
 - [ ] アイコン設定
 - [ ] 最近使ったファイル履歴
+
+## 目次のプレーンテキスト（.txt）インポート ✅
+
+- [x] `toc_panel.py`: `_parse_txt_list()` を追加（1行1タイトル、level=1、page=None、空行スキップ）
+- [x] `toc_panel.py`: `_import_csv_from_path` を `_import_toc_from_path` にリネームし拡張子で.csv/.txtを振り分け
+- [x] `toc_panel.py`: メニュー用ファイルダイアログのフィルタに.txtを追加
+- [x] `toc_panel.py`: drag&drop（`dragEnterEvent`/`dropEvent`/`eventFilter`）に.txt許可を追加
+- [x] `main_window.py`: サブメニュータイトル「CSVインポート」→「インポート」
+- [x] 動作確認（headless Qt(offscreen)でパーサ・ディスパッチ・CSV回帰を検証）
+
+### レビュー
+
+- `_parse_txt_list()` は行を `strip()` するのみでタイトルを加工しない方針（ユーザー確認済み）。空行はスキップ、他は全てlevel=1・page=Noneでフラットに取り込む。
+- `.csv`/`.txt` の振り分けは拡張子ベース。`_IMPORTABLE_EXTS = (".csv", ".txt")` をdrag&dropの許可判定にも共通利用し、CSV専用だった箇所を1箇所に集約。
+- headless(offscreen QPA)でのスクリプト検証: (1) 空行混じりのtxtから4件が正しくlevel=1/page=Noneで抽出される (2) `_import_toc_from_path` 経由でツリーに反映される (3) 既存CSVインポート（level/title/page 3列形式）が従来通り動作する、の3点を確認。実GUIでのメニュークリック・実ドラッグ操作は未確認（環境上offscreenのみ）。
+- ページラベルパネル（CSV専用）は変更なし。

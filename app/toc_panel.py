@@ -459,21 +459,26 @@ class TocPanel(QWidget):
         if self._pending_item is not None:
             return
         path, _ = QFileDialog.getOpenFileName(
-            self, "CSVファイルを開く", "", "CSV Files (*.csv);;All Files (*)"
+            self, "目次ファイルを開く", "",
+            "CSV/Text Files (*.csv *.txt);;CSV Files (*.csv);;Text Files (*.txt);;All Files (*)"
         )
         if not path:
             return
-        self._import_csv_from_path(path)
+        self._import_toc_from_path(path)
 
-    def _import_csv_from_path(self, path: str) -> None:
+    def _import_toc_from_path(self, path: str) -> None:
+        is_txt = path.lower().endswith(".txt")
         try:
-            entries, warnings = self._parse_csv_with_warnings(path)
+            if is_txt:
+                entries, warnings = self._parse_txt_list(path), []
+            else:
+                entries, warnings = self._parse_csv_with_warnings(path)
         except Exception as e:
-            QMessageBox.critical(self, "CSVエラー", f"読み込みに失敗しました:\n{e}")
+            QMessageBox.critical(self, "インポートエラー", f"読み込みに失敗しました:\n{e}")
             return
 
         if not entries:
-            QMessageBox.information(self, "CSV", "有効なエントリが見つかりませんでした。")
+            QMessageBox.information(self, "インポート", "有効なエントリが見つかりませんでした。")
             return
 
         if self._tree.topLevelItemCount() > 0:
@@ -543,37 +548,51 @@ class TocPanel(QWidget):
 
         return entries, warnings
 
+    def _parse_txt_list(self, path: str) -> list[TocEntry]:
+        """プレーンテキスト形式: 1行1タイトルを読み込む。
+        階層・ページ番号を持たず、全件level=1・ページ未設定として取り込む。"""
+        entries: list[TocEntry] = []
+        with open(path, encoding="utf-8-sig") as f:
+            for line in f:
+                title = line.strip()
+                if not title:
+                    continue
+                entries.append(TocEntry(level=1, title=title, page=None))
+        return entries
+
     # ------------------------------------------------------------------
-    # ドラッグ&ドロップ（CSVインポート）
+    # ドラッグ&ドロップ（目次インポート）
     # ------------------------------------------------------------------
+
+    _IMPORTABLE_EXTS = (".csv", ".txt")
 
     def dragEnterEvent(self, event: QDragEnterEvent) -> None:
         if self._doc is None or self._pending_item is not None:
             return
         urls = event.mimeData().urls()
-        if urls and urls[0].toLocalFile().lower().endswith(".csv"):
+        if urls and urls[0].toLocalFile().lower().endswith(self._IMPORTABLE_EXTS):
             event.acceptProposedAction()
 
     def dropEvent(self, event: QDropEvent) -> None:
         urls = event.mimeData().urls()
         if urls:
-            self._import_csv_from_path(urls[0].toLocalFile())
+            self._import_toc_from_path(urls[0].toLocalFile())
 
     def eventFilter(self, obj, event) -> bool:
         # self._tree は InternalMove 用に WA_AcceptDrops が立っており、外部からの
-        # CSVファイルドロップがツリーに奪われて親に伝播しないため、ここで横取りする。
+        # ファイルドロップがツリーに奪われて親に伝播しないため、ここで横取りする。
         if obj is self._tree:
             etype = event.type()
             if etype in (QEvent.Type.DragEnter, QEvent.Type.DragMove):
                 urls = event.mimeData().urls()
-                if urls and urls[0].toLocalFile().lower().endswith(".csv"):
+                if urls and urls[0].toLocalFile().lower().endswith(self._IMPORTABLE_EXTS):
                     if self._doc is not None and self._pending_item is None:
                         event.acceptProposedAction()
                     return True
             elif etype == QEvent.Type.Drop:
                 urls = event.mimeData().urls()
-                if urls and urls[0].toLocalFile().lower().endswith(".csv"):
-                    self._import_csv_from_path(urls[0].toLocalFile())
+                if urls and urls[0].toLocalFile().lower().endswith(self._IMPORTABLE_EXTS):
+                    self._import_toc_from_path(urls[0].toLocalFile())
                     return True
         return super().eventFilter(obj, event)
 

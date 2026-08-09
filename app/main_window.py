@@ -145,16 +145,16 @@ class MainWindow(QMainWindow):
         csv_export_menu.addAction(self._action_export_both)
         file_menu.addMenu(csv_export_menu)
 
-        csv_import_menu = QMenu("CSVインポート", self)
+        import_menu = QMenu("インポート", self)
         self._action_import_toc = QAction("目次をインポート...", self)
         self._action_import_toc.triggered.connect(self._import_toc_csv)
         self._action_import_toc.setEnabled(False)
-        csv_import_menu.addAction(self._action_import_toc)
+        import_menu.addAction(self._action_import_toc)
         self._action_import_labels = QAction("ページラベルをインポート...", self)
         self._action_import_labels.triggered.connect(self._import_labels_csv)
         self._action_import_labels.setEnabled(False)
-        csv_import_menu.addAction(self._action_import_labels)
-        file_menu.addMenu(csv_import_menu)
+        import_menu.addAction(self._action_import_labels)
+        file_menu.addMenu(import_menu)
 
         file_menu.addSeparator()
 

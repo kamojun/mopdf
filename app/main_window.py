@@ -2,15 +2,15 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Optional
 from PySide6.QtCore import Qt, QSize, QSettings
-from PySide6.QtGui import QAction, QDragEnterEvent, QDropEvent
+from PySide6.QtGui import QAction, QDragEnterEvent, QDropEvent, QShortcut, QKeySequence, QCursor
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QSplitter, QFileDialog,
-    QStatusBar, QLabel, QMessageBox, QToolBar, QPushButton, QLineEdit, QMenu
+    QStatusBar, QLabel, QMessageBox, QMenu, QInputDialog
 )
 
 from .pdf_document import PdfDocument
 from .pdf_viewer import PdfViewer
-from .toc_panel import TocPanel
+from .toc_panel import TocPanel, INSERT_BELOW_SELECTED, INSERT_PAGE_ORDER
 from .page_label_panel import PageLabelPanel
 
 
@@ -25,6 +25,7 @@ class MainWindow(QMainWindow):
         self._pdf_filename: Optional[str] = None
         self._settings = QSettings("mopdf", "mopdf")
         self._recent_files: list[str] = self._settings.value("recentFiles", [], type=list)
+        self._select_mode_active: bool = False  # テキスト選択モードが有効かどうか
 
         self._setup_ui()
         self._setup_menu()
@@ -53,6 +54,9 @@ class MainWindow(QMainWindow):
         self._viewer = PdfViewer()
         self._viewer.page_changed.connect(self._on_page_changed)
         self._viewer.text_selected.connect(self._on_text_selected)
+        self._viewer.select_mode_requested.connect(self._on_select_mode_requested)
+        self._viewer.page_jump_dialog_requested.connect(self._on_page_jump_dialog_requested)
+        self._viewer.page_label_requested.connect(self._page_label_panel.add_range_at_page)
 
         # 左右分割
         main_splitter = QSplitter(Qt.Orientation.Horizontal)
@@ -81,26 +85,9 @@ class MainWindow(QMainWindow):
         # ビューアのページ変更 → TocPanel に現在ページを通知
         self._viewer.page_changed.connect(self._toc_panel.set_current_page)
 
-        # テキスト選択モードトグルボタン（ツールバー）
-        toolbar = QToolBar("ツール")
-        toolbar.setMovable(False)
-        self._btn_select_mode = QPushButton("📄 テキスト選択モード")
-        self._btn_select_mode.setCheckable(True)
-        self._btn_select_mode.setEnabled(False)
-        self._btn_select_mode.setToolTip("PDFテキストを選択して目次エントリのタイトルに使用")
-        self._btn_select_mode.toggled.connect(self._on_select_mode_toggled)
-        toolbar.addWidget(self._btn_select_mode)
-
-        toolbar.addSeparator()
-
-        self._page_input = QLineEdit()
-        self._page_input.setPlaceholderText("ページへ移動...")
-        self._page_input.setFixedWidth(130)
-        self._page_input.setEnabled(False)
-        self._page_input.returnPressed.connect(self._on_page_jump_input)
-        toolbar.addWidget(self._page_input)
-
-        self.addToolBar(toolbar)
+        # Escapeキーでテキスト選択モードをキャンセル
+        self._escape_shortcut = QShortcut(QKeySequence(Qt.Key.Key_Escape), self)
+        self._escape_shortcut.activated.connect(self._cancel_select_mode)
 
     def _setup_menu(self) -> None:
         menubar = self.menuBar()
@@ -227,8 +214,6 @@ class MainWindow(QMainWindow):
         self._viewer.load(self._doc)
         self._toc_panel.load(self._doc)
         self._page_label_panel.load(self._doc)
-        self._btn_select_mode.setEnabled(True)
-        self._page_input.setEnabled(True)
         for action in (self._action_export_toc, self._action_export_labels,
                        self._action_export_both, self._action_import_toc,
                        self._action_import_labels):
@@ -311,10 +296,9 @@ class MainWindow(QMainWindow):
     # テキスト選択モード
     # ------------------------------------------------------------------
 
-    def _on_page_jump_input(self) -> None:
-        if not self._doc.is_open:
-            return
-        text = self._page_input.text().strip()
+    def _jump_to_page_text(self, text: str) -> None:
+        """ページ番号またはページラベルの文字列を解決してそのページへ移動する。"""
+        text = text.strip()
         if not text:
             return
 
@@ -331,20 +315,40 @@ class MainWindow(QMainWindow):
 
         page_index = max(0, min(page_index, self._doc.page_count - 1))
         self._viewer.scroll_to_page(page_index)
-        self._page_input.clear()
-        self._viewer.setFocus()
 
-    def _on_select_mode_toggled(self, enabled: bool) -> None:
-        self._viewer.set_select_mode(enabled)
-        if enabled:
-            self._btn_select_mode.setStyleSheet("background: #ffe066; font-weight: bold;")
-        else:
-            self._btn_select_mode.setStyleSheet("")
+    def _on_page_jump_dialog_requested(self) -> None:
+        if not self._doc.is_open:
+            return
+        text, ok = QInputDialog.getText(self, "ページへ移動", "ページ番号またはラベル:")
+        if ok:
+            self._jump_to_page_text(text)
+
+    def _on_select_mode_requested(self) -> None:
+        self._select_mode_active = True
+        self._viewer.set_select_mode(True)
+
+    def _cancel_select_mode(self) -> None:
+        if not self._select_mode_active:
+            return
+        self._select_mode_active = False
+        self._viewer.set_select_mode(False)
 
     def _on_text_selected(self, text: str, page_index: int) -> None:
-        self._toc_panel.add_entry_with_title(text, page_index)
-        # 選択後はモードを解除
-        self._btn_select_mode.setChecked(False)
+        self._select_mode_active = False
+        self._viewer.set_select_mode(False)
+
+        menu = QMenu(self)
+        below_action = menu.addAction("選択されている項目の下に挿入")
+        page_order_action = menu.addAction("ページ番号順の位置に挿入")
+        chosen = menu.exec(QCursor.pos())
+        if chosen is below_action:
+            mode = INSERT_BELOW_SELECTED
+        elif chosen is page_order_action:
+            mode = INSERT_PAGE_ORDER
+        else:
+            return  # ポップアップをキャンセル → 追加しない
+
+        self._toc_panel.add_entry_with_title(text, page_index, insert_mode=mode)
 
     # ------------------------------------------------------------------
     # ドラッグ&ドロップ

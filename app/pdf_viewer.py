@@ -4,7 +4,7 @@ from typing import Optional
 from PySide6.QtCore import Qt, Signal, QTimer, QRect, QPoint, QThreadPool, Slot
 from PySide6.QtGui import QPixmap, QImage, QPainter, QColor, QPen, QCursor, QFont
 from PySide6.QtWidgets import (
-    QScrollArea, QWidget, QVBoxLayout, QLabel, QSizePolicy, QFrame, QRubberBand
+    QScrollArea, QWidget, QVBoxLayout, QLabel, QSizePolicy, QFrame, QRubberBand, QMenu
 )
 
 from .pdf_document import PdfDocument
@@ -17,6 +17,9 @@ class PageWidget(QLabel):
     """1ページ分の表示ウィジェット。テキスト選択モード時はドラッグで矩形選択できる。"""
 
     text_selected = Signal(str, int)  # (抽出テキスト, 0-indexed page)
+    select_mode_requested = Signal()  # 右クリックメニューの「テキスト選択し目次追加」
+    page_jump_dialog_requested = Signal()  # 右クリックメニューの「ページへ移動」
+    page_label_requested = Signal(int)  # 右クリックメニューの「この位置にページラベル追加」(0-indexed page)
 
     def __init__(self, page_index: int, width: int, height: int,
                  doc: PdfDocument, zoom: float) -> None:
@@ -105,10 +108,27 @@ class PageWidget(QLabel):
         else:
             super().mouseReleaseEvent(event)
 
+    def contextMenuEvent(self, event) -> None:
+        menu = QMenu(self)
+        select_action = menu.addAction("テキスト選択し目次追加")
+        menu.addSeparator()
+        jump_action = menu.addAction("ページへ移動")
+        label_action = menu.addAction("この位置にページラベル追加")
+        chosen = menu.exec(event.globalPos())
+        if chosen is select_action:
+            self.select_mode_requested.emit()
+        elif chosen is jump_action:
+            self.page_jump_dialog_requested.emit()
+        elif chosen is label_action:
+            self.page_label_requested.emit(self.page_index)
+
 
 class PdfViewer(QScrollArea):
     page_changed = Signal(int)          # 0-indexed 現在ページ
     text_selected = Signal(str, int)    # (抽出テキスト, 0-indexed page)
+    select_mode_requested = Signal()  # 右クリックメニューの「テキスト選択し目次追加」
+    page_jump_dialog_requested = Signal()  # 右クリックメニューの「ページへ移動」
+    page_label_requested = Signal(int)  # 右クリックメニューの「この位置にページラベル追加」(0-indexed page)
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
@@ -191,6 +211,9 @@ class PdfViewer(QScrollArea):
             pw = PageWidget(i, w, h, self._doc, self._zoom)
             pw.set_select_mode(self._select_mode)
             pw.text_selected.connect(self.text_selected)
+            pw.select_mode_requested.connect(self.select_mode_requested)
+            pw.page_jump_dialog_requested.connect(self.page_jump_dialog_requested)
+            pw.page_label_requested.connect(self.page_label_requested)
             self._layout.addWidget(pw, 0, Qt.AlignmentFlag.AlignHCenter)
             self._page_widgets.append(pw)
 

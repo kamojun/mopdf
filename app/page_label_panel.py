@@ -358,13 +358,20 @@ class PageLabelPanel(QWidget):
             QMessageBox.critical(self, "CSVエラー", f"書き出しに失敗しました:\n{e}")
 
     def _add_range(self) -> None:
+        # デフォルト: 次の物理ページ（既存行数がそのまま次のページになる、簡易）
+        self._add_range_with_start(self._table.rowCount())
+
+    def add_range_at_page(self, page_index: int) -> None:
+        """指定した0-indexedページを開始ページとする範囲を追加する
+        （PDFページ表示の右クリックメニュー「この位置にページラベル追加」から呼ばれる）。"""
+        self._add_range_with_start(page_index)
+
+    def _add_range_with_start(self, start_page: int) -> None:
         if self._doc is None:
             return
         row = self._table.rowCount()
         self._table.setRowCount(row + 1)
         self._table.blockSignals(True)
-        # デフォルト: 次の物理ページ（0-indexed）
-        start_page = row  # 既存行数がそのまま次のページになる（簡易）
         self._populate_row(row, PageLabelRange(start_page=start_page, style="D", prefix="", first_num=1))
         self._table.blockSignals(False)
         self.page_labels_modified.emit()

@@ -13,6 +13,9 @@ from PySide6.QtWidgets import (
 
 from .pdf_document import PdfDocument, TocEntry
 
+INSERT_BELOW_SELECTED = "below_selected"  # 目次ツリーで選択中の項目の下に挿入
+INSERT_PAGE_ORDER = "page_order"          # 既存項目のページ番号順で適切な位置に挿入
+
 
 class TitleDelegate(QStyledItemDelegate):
     """タイトル列のデリゲート。Tab で同行のページ番号列編集に移る。"""
@@ -103,7 +106,7 @@ class TocPanel(QWidget):
         self._pending_item: Optional[QTreeWidgetItem] = None  # 追加直後・未確定のアイテム
         self._pending_jump_item: Optional[QTreeWidgetItem] = None  # ダブルクリック判定待ちのジャンプ
         self._page_edit_mode: bool = False  # ページ番号連続入力モード
-        self._page_increment: int = 1       # 連続入力モードでEnterのみ押した際の加算ページ数
+        self._page_increment: int = self._NO_SUGGESTION  # 連続入力モードでEnterのみ押した際の加算ページ数
         self._pending_seq_seed: Optional[int] = None  # 次に開くエディタへの提案値(0-indexed)
         self._history: list[list[TocEntry]] = []
         self._staged_snapshot: Optional[list[TocEntry]] = None  # _add_entry用
@@ -154,6 +157,7 @@ class TocPanel(QWidget):
         self._spin_increment.setSpecialValueText("OFF")
         self._spin_increment.setValue(self._page_increment)
         self._spin_increment.setPrefix("+")
+        self._spin_increment.setEnabled(False)
         self._spin_increment.setFixedWidth(52)
         self._spin_increment.setFixedHeight(24)
         self._spin_increment.setToolTip(
@@ -265,9 +269,10 @@ class TocPanel(QWidget):
             walk(self._tree.topLevelItem(i), 1)
         return result
 
-    def add_entry_with_title(self, title: str, page_index: int) -> None:
+    def add_entry_with_title(self, title: str, page_index: int,
+                              insert_mode: str = INSERT_BELOW_SELECTED) -> None:
         """テキスト選択などから外部にエントリを追加する"""
-        self._add_entry(title=title, page_index=page_index)
+        self._add_entry(title=title, page_index=page_index, insert_mode=insert_mode)
 
     # ------------------------------------------------------------------
     # 内部: ツリー構築
@@ -352,7 +357,8 @@ class TocPanel(QWidget):
     # 編集操作
     # ------------------------------------------------------------------
 
-    def _add_entry(self, *, title: str = "（無題）", page_index: Optional[int] = None, before: bool = False) -> None:
+    def _add_entry(self, *, title: str = "（無題）", page_index: Optional[int] = None,
+                    before: bool = False, insert_mode: str = INSERT_BELOW_SELECTED) -> None:
         if self._doc is None:
             return
         if page_index is None:
@@ -360,17 +366,20 @@ class TocPanel(QWidget):
         snapshot = self.get_toc()
 
         item = self._make_item(title, page_index)
-        selected = self._tree.currentItem()
-        if selected:
-            parent = selected.parent()
-            if parent:
-                idx = parent.indexOfChild(selected)
-                parent.insertChild(idx if before else idx + 1, item)
-            else:
-                idx = self._tree.indexOfTopLevelItem(selected)
-                self._tree.insertTopLevelItem(idx if before else idx + 1, item)
+        if insert_mode == INSERT_PAGE_ORDER and page_index is not None:
+            self._insert_item_by_page_order(item, page_index)
         else:
-            self._tree.addTopLevelItem(item)
+            selected = self._tree.currentItem()
+            if selected:
+                parent = selected.parent()
+                if parent:
+                    idx = parent.indexOfChild(selected)
+                    parent.insertChild(idx if before else idx + 1, item)
+                else:
+                    idx = self._tree.indexOfTopLevelItem(selected)
+                    self._tree.insertTopLevelItem(idx if before else idx + 1, item)
+            else:
+                self._tree.addTopLevelItem(item)
 
         self._tree.setCurrentItem(item)
         self._tree.editItem(item, 0)
@@ -378,6 +387,33 @@ class TocPanel(QWidget):
         # クリアする場合があるため、editItem 呼び出し後に設定する
         self._pending_item = item
         self._staged_snapshot = snapshot
+
+    def _insert_item_by_page_order(self, item: QTreeWidgetItem, page_index: int) -> None:
+        """既存項目をget_toc()と同じ先行順（DFS）で走査し、page_index以下で
+        最後に見つかった項目の直後・同じ階層に挿入する。該当項目がなければ
+        末尾のトップレベル項目として追加する。"""
+        target: Optional[QTreeWidgetItem] = None
+
+        def walk(node: QTreeWidgetItem) -> None:
+            nonlocal target
+            page = node.data(0, Qt.ItemDataRole.UserRole)
+            if page is not None and page <= page_index:
+                target = node
+            for i in range(node.childCount()):
+                walk(node.child(i))
+
+        for i in range(self._tree.topLevelItemCount()):
+            walk(self._tree.topLevelItem(i))
+
+        if target is None:
+            self._tree.addTopLevelItem(item)
+            return
+
+        parent = target.parent()
+        if parent:
+            parent.insertChild(parent.indexOfChild(target) + 1, item)
+        else:
+            self._tree.insertTopLevelItem(self._tree.indexOfTopLevelItem(target) + 1, item)
 
     def _delete_item(self, item: QTreeWidgetItem) -> None:
         parent = item.parent()
@@ -783,6 +819,7 @@ class TocPanel(QWidget):
     def _toggle_page_edit_mode(self, checked: bool) -> None:
         self._page_edit_mode = checked
         self._pending_seq_seed = None
+        self._spin_increment.setEnabled(checked)
         if not checked:
             return
         item = self._tree.currentItem()
@@ -855,7 +892,7 @@ class TocPanel(QWidget):
         self._btn_left.setEnabled(has_sel)
         self._btn_right.setEnabled(has_sel)
         self._btn_page_mode.setEnabled(has_doc)
-        self._spin_increment.setEnabled(has_doc)
+        self._spin_increment.setEnabled(has_doc and self._page_edit_mode)
 
     # ------------------------------------------------------------------
     # ユーティリティ

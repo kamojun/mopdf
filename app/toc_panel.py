@@ -8,7 +8,7 @@ from PySide6.QtGui import QKeySequence, QDragEnterEvent, QDropEvent
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QTreeWidget, QTreeWidgetItem,
     QLabel, QPushButton, QAbstractItemView, QStyledItemDelegate,
-    QLineEdit, QFileDialog, QMessageBox, QApplication,
+    QLineEdit, QFileDialog, QMessageBox, QApplication, QSpinBox,
 )
 
 from .pdf_document import PdfDocument, TocEntry
@@ -38,22 +38,41 @@ class TitleDelegate(QStyledItemDelegate):
 
 class PageLineDelegate(QStyledItemDelegate):
     """ページ番号列のインライン編集をQLineEditで行うデリゲート。
-    整数・論理ラベル・'?'（未設定）を受け付ける。"""
+    整数・論理ラベル・'?'（未設定）を受け付ける。
+    Enterキー押下時は on_enter(index) を呼び出す（連続入力モード用）。"""
 
-    def __init__(self, get_display_text, resolve_page, parent=None):
+    def __init__(self, get_display_text, resolve_page, on_enter=None, get_seed_text=None, parent=None):
         super().__init__(parent)
         self._get_display_text = get_display_text  # (page0: int | None) -> str
         self._resolve_page = resolve_page           # (text: str) -> int | None
+        self._on_enter = on_enter                   # (index: QModelIndex) -> None
+        self._get_seed_text = get_seed_text          # (index: QModelIndex) -> str | None
+        self._current_index = QModelIndex()
 
     def createEditor(self, parent, option, index):
+        self._current_index = index
         editor = QLineEdit(parent)
         editor.setFrame(False)
         editor.setAlignment(Qt.AlignmentFlag.AlignRight)
         return editor
 
+    def eventFilter(self, editor, event):
+        if (event.type() == QEvent.Type.KeyPress
+                and event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter)):
+            self.commitData.emit(editor)
+            self.closeEditor.emit(editor, QStyledItemDelegate.EndEditHint.NoHint)
+            if self._on_enter is not None:
+                self._on_enter(self._current_index)
+            return True
+        return super().eventFilter(editor, event)
+
     def setEditorData(self, editor, index):
-        page0 = index.sibling(index.row(), 0).data(Qt.ItemDataRole.UserRole)
-        editor.setText(self._get_display_text(page0))
+        seed_text = self._get_seed_text(index) if self._get_seed_text else None
+        if seed_text is not None:
+            editor.setText(seed_text)
+        else:
+            page0 = index.sibling(index.row(), 0).data(Qt.ItemDataRole.UserRole)
+            editor.setText(self._get_display_text(page0))
         editor.selectAll()
 
     def setModelData(self, editor, model, index):
@@ -74,12 +93,16 @@ class TocPanel(QWidget):
     toc_modified = Signal()             # 編集が行われたとき
 
     _MAX_HISTORY = 50
+    _NO_SUGGESTION = -1  # 増分スピンボックスの最小値: 提案を出さない(OFF)
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self._doc: Optional[PdfDocument] = None
         self._current_page: int = 0     # MainWindowから更新される
         self._pending_item: Optional[QTreeWidgetItem] = None  # 追加直後・未確定のアイテム
+        self._page_edit_mode: bool = False  # ページ番号連続入力モード
+        self._page_increment: int = 1       # 連続入力モードでEnterのみ押した際の加算ページ数
+        self._pending_seq_seed: Optional[int] = None  # 次に開くエディタへの提案値(0-indexed)
         self._history: list[list[TocEntry]] = []
         self._staged_snapshot: Optional[list[TocEntry]] = None  # _add_entry用
         self.setAcceptDrops(True)
@@ -112,6 +135,33 @@ class TocPanel(QWidget):
         for btn in [self._btn_add, self._btn_del, self._btn_up,
                     self._btn_down, self._btn_left, self._btn_right]:
             tb_layout.addWidget(btn)
+
+        self._btn_page_mode = QPushButton("#")
+        self._btn_page_mode.setToolTip(
+            "ページ番号連続入力モード\n"
+            "ONの間、Enterで次の行のページ番号入力に自動で移動します"
+        )
+        self._btn_page_mode.setCheckable(True)
+        self._btn_page_mode.setFixedWidth(32)
+        self._btn_page_mode.setFixedHeight(24)
+        self._btn_page_mode.setStyleSheet("font-size: 12px;")
+        tb_layout.addWidget(self._btn_page_mode)
+
+        self._spin_increment = QSpinBox()
+        self._spin_increment.setRange(self._NO_SUGGESTION, 999)
+        self._spin_increment.setSpecialValueText("OFF")
+        self._spin_increment.setValue(self._page_increment)
+        self._spin_increment.setPrefix("+")
+        self._spin_increment.setFixedWidth(52)
+        self._spin_increment.setFixedHeight(24)
+        self._spin_increment.setToolTip(
+            "ページ番号連続入力モードで、Enterのみ押したときに\n"
+            "前の行から自動で加算するページ数\n"
+            "+0: 前の行と同じページ番号を提案（インクリメントなし）\n"
+            "OFF: 提案を表示せず、毎回手入力する"
+        )
+        tb_layout.addWidget(self._spin_increment)
+
         tb_layout.addStretch()
         layout.addWidget(toolbar)
 
@@ -139,7 +189,12 @@ class TocPanel(QWidget):
             )
         )
         self._tree.setItemDelegateForColumn(
-            1, PageLineDelegate(self._get_page_display_text, self._resolve_page, self)
+            1, PageLineDelegate(
+                self._get_page_display_text, self._resolve_page,
+                on_enter=self._on_page_enter,
+                get_seed_text=self._get_page_edit_seed_text,
+                parent=self,
+            )
         )
 
         self._tree.itemClicked.connect(self._on_item_clicked)
@@ -158,6 +213,8 @@ class TocPanel(QWidget):
         self._btn_down.clicked.connect(self._move_down)
         self._btn_left.clicked.connect(self._indent_left)
         self._btn_right.clicked.connect(self._indent_right)
+        self._btn_page_mode.toggled.connect(self._toggle_page_edit_mode)
+        self._spin_increment.valueChanged.connect(self._on_increment_changed)
 
         self._tree.itemSelectionChanged.connect(self._update_button_states)
         self._update_button_states()
@@ -173,6 +230,8 @@ class TocPanel(QWidget):
     def clear(self) -> None:
         self._doc = None
         self._tree.clear()
+        self._btn_page_mode.setChecked(False)
+        self._pending_seq_seed = None
         self._update_button_states()
 
     def refresh_page_labels(self) -> None:
@@ -686,6 +745,57 @@ class TocPanel(QWidget):
             self._push_history()
             self._tree.editItem(item, 1)
 
+    def _toggle_page_edit_mode(self, checked: bool) -> None:
+        self._page_edit_mode = checked
+        self._pending_seq_seed = None
+        if not checked:
+            return
+        item = self._tree.currentItem()
+        if item is None and self._tree.topLevelItemCount() > 0:
+            item = self._tree.topLevelItem(0)
+        if item is None:
+            return
+        self._tree.setCurrentItem(item)
+        self._push_history()
+        self._tree.editItem(item, 1)
+
+    def _on_increment_changed(self, value: int) -> None:
+        self._page_increment = value
+
+    def _on_page_enter(self, index: QModelIndex) -> None:
+        """ページ番号連続入力モード中、ページ列でEnterが押されたら次の行のページ列に移る。
+        次のエディタには前の行のページ+加算値を提案として表示する。"""
+        if not self._page_edit_mode:
+            return
+        item = self._tree.itemFromIndex(index)
+        if item is None:
+            return
+        next_item = self._tree.itemBelow(item)
+        if next_item is None:
+            self._btn_page_mode.setChecked(False)
+            return
+        last_page0 = item.data(0, Qt.ItemDataRole.UserRole)
+        self._pending_seq_seed = self._compute_seed_page(last_page0)
+        self._tree.setCurrentItem(next_item)
+        self._push_history()
+        QTimer.singleShot(0, lambda: self._tree.editItem(next_item, 1))
+
+    def _compute_seed_page(self, last_page0: Optional[int]) -> Optional[int]:
+        if last_page0 is None or self._page_increment == self._NO_SUGGESTION:
+            return None
+        seed = last_page0 + self._page_increment
+        if self._doc is not None and self._doc.page_count:
+            seed = min(seed, self._doc.page_count - 1)
+        return seed
+
+    def _get_page_edit_seed_text(self, index: QModelIndex) -> Optional[str]:
+        """連続入力モードで次のエディタを開く際の提案テキスト。使ったら消費する。"""
+        if not self._page_edit_mode or self._pending_seq_seed is None:
+            return None
+        text = self._get_page_display_text(self._pending_seq_seed)
+        self._pending_seq_seed = None
+        return text
+
     def _on_item_changed(self, item: QTreeWidgetItem, column: int) -> None:
         if column == 1:
             # SpinBoxデリゲートがUserRole+1に列1として書いた値を読み、列0のUserRole(ページ)に反映
@@ -708,6 +818,8 @@ class TocPanel(QWidget):
         self._btn_down.setEnabled(has_sel)
         self._btn_left.setEnabled(has_sel)
         self._btn_right.setEnabled(has_sel)
+        self._btn_page_mode.setEnabled(has_doc)
+        self._spin_increment.setEnabled(has_doc)
 
     # ------------------------------------------------------------------
     # ユーティリティ
@@ -738,7 +850,7 @@ class TocPanel(QWidget):
                 item = tree.currentItem()
                 if item is not None:
                     self._push_history()
-                    tree.editItem(item, 0)
+                    tree.editItem(item, 1 if self._page_edit_mode else 0)
                     return
             elif event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
                 if tree.currentItem() is not None:

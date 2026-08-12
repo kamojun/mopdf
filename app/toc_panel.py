@@ -779,6 +779,11 @@ class TocPanel(QWidget):
     # ------------------------------------------------------------------
 
     def _on_item_clicked(self, item: QTreeWidgetItem, column: int) -> None:
+        from PySide6.QtWidgets import QApplication
+        if QApplication.keyboardModifiers() & Qt.KeyboardModifier.AltModifier:
+            # Alt+クリックは選択のみ行い、表示ページは変更しない
+            self._cancel_pending_jump()
+            return
         # ダブルクリック(編集開始)の前半である可能性があるため、少し待ってからジャンプする。
         # その間に同じ項目が編集開始されたり、選択が別の項目に移ったりした場合は
         # ジャンプをキャンセルする(_cancel_pending_jump系)。
@@ -918,13 +923,14 @@ class TocPanel(QWidget):
                     self._indent_left(); return
                 if key == Qt.Key.Key_Right:
                     self._indent_right(); return
-            if mods & Qt.KeyboardModifier.AltModifier and key in (Qt.Key.Key_Up, Qt.Key.Key_Down):
+            if key in (Qt.Key.Key_Up, Qt.Key.Key_Down) and not (mods & Qt.KeyboardModifier.ShiftModifier):
                 QTreeWidget.keyPressEvent(tree, event)
-                item = tree.currentItem()
-                if item is not None:
-                    page = item.data(0, Qt.ItemDataRole.UserRole)
-                    if page is not None:
-                        self.page_jump_requested.emit(page)
+                if not (mods & Qt.KeyboardModifier.AltModifier):
+                    item = tree.currentItem()
+                    if item is not None:
+                        page = item.data(0, Qt.ItemDataRole.UserRole)
+                        if page is not None:
+                            self.page_jump_requested.emit(page)
                 return
             if mods & Qt.KeyboardModifier.ShiftModifier and key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
                 self._add_entry(before=True); return

@@ -179,6 +179,18 @@ class PageLabelPanel(QWidget):
             ))
         return sorted(result, key=lambda r: r.start_page)
 
+    def describe_ranges(self, ranges: list[PageLabelRange]) -> list[str]:
+        """差分表示用に、範囲を1行文字列に変換する。"""
+        lines = []
+        for r in ranges:
+            style_label = STYLE_LABELS.get(r.style, r.style or "なし")
+            text = f"p.{r.start_page + 1}〜: {style_label}"
+            if r.prefix:
+                text += f" {r.prefix}"
+            text += f" {r.first_num}"
+            lines.append(text)
+        return lines
+
     # ------------------------------------------------------------------
 
     def _rebuild(self) -> None:

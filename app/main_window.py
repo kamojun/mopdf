@@ -1,26 +1,30 @@
 from __future__ import annotations
 from pathlib import Path
 from typing import Optional
-from PySide6.QtCore import Qt, QSize, QSettings
+from PySide6.QtCore import Qt, QSize, QSettings, QTimer
 from PySide6.QtGui import QAction, QDragEnterEvent, QDropEvent, QShortcut, QKeySequence, QCursor
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QSplitter, QFileDialog,
     QStatusBar, QLabel, QMessageBox, QMenu, QInputDialog
 )
 
-from .pdf_document import PdfDocument
+from .pdf_document import PdfDocument, TocEntry, PageLabelRange
 from .pdf_viewer import PdfViewer
 from .toc_panel import TocPanel, INSERT_BELOW_SELECTED, INSERT_PAGE_ORDER
 from .page_label_panel import PageLabelPanel
+from .changes_dialog import ChangesDialog, paired_diff
 
 
 class MainWindow(QMainWindow):
     _MAX_RECENT = 10
+    _UNSAVED_CHECK_INTERVAL_MS = 5000  # 未保存アスタリスクをバックグラウンドで確認する間隔
 
     def __init__(self) -> None:
         super().__init__()
         self._doc = PdfDocument()
         self._unsaved = False
+        self._toc_baseline: list[TocEntry] = []
+        self._page_label_baseline: list[PageLabelRange] = []
         self._current_page = 0
         self._pdf_filename: Optional[str] = None
         self._settings = QSettings("mopdf", "mopdf")
@@ -30,6 +34,11 @@ class MainWindow(QMainWindow):
         self._setup_ui()
         self._setup_menu()
         self.setAcceptDrops(True)
+
+        self._unsaved_check_timer = QTimer(self)
+        self._unsaved_check_timer.setInterval(self._UNSAVED_CHECK_INTERVAL_MS)
+        self._unsaved_check_timer.timeout.connect(self._periodic_unsaved_check)
+        self._unsaved_check_timer.start()
 
     # ------------------------------------------------------------------
     # UI構築
@@ -150,6 +159,13 @@ class MainWindow(QMainWindow):
         quit_action.triggered.connect(self.close)
         file_menu.addAction(quit_action)
 
+        edit_menu = menubar.addMenu("編集")
+        self._action_show_changes = QAction("変更点を表示...", self)
+        self._action_show_changes.setShortcut("Ctrl+D")
+        self._action_show_changes.triggered.connect(self._show_changes_dialog)
+        self._action_show_changes.setEnabled(False)
+        edit_menu.addAction(self._action_show_changes)
+
     # ------------------------------------------------------------------
     # ファイルを開く
     # ------------------------------------------------------------------
@@ -216,9 +232,11 @@ class MainWindow(QMainWindow):
         self._page_label_panel.load(self._doc)
         for action in (self._action_export_toc, self._action_export_labels,
                        self._action_export_both, self._action_import_toc,
-                       self._action_import_labels):
+                       self._action_import_labels, self._action_show_changes):
             action.setEnabled(True)
 
+        self._toc_baseline = self._toc_panel.get_toc()
+        self._page_label_baseline = self._page_label_panel.get_page_labels()
         self._unsaved = False
         self._update_title()
         self._update_status(0)
@@ -239,6 +257,8 @@ class MainWindow(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "保存エラー", f"保存に失敗しました:\n{e}")
             return
+        self._toc_baseline = toc
+        self._page_label_baseline = labels
         self._unsaved = False
         self._update_title()
 
@@ -384,6 +404,25 @@ class MainWindow(QMainWindow):
             self._unsaved = True
             self._update_title()
 
+    def _periodic_unsaved_check(self) -> None:
+        """バックグラウンドタイマーから定期的に呼ばれる。既に未保存扱いの時だけ、
+        実際にベースラインと一致しているか確かめてアスタリスクを更新する
+        (何も編集していなければ比較のしようがないのでスキップする)。"""
+        if self._unsaved:
+            self._recompute_unsaved_state()
+
+    def _recompute_unsaved_state(self) -> None:
+        """現在の内容をベースライン(最後の保存/読込時点)と比較して未保存状態を更新する。
+        編集して元の内容に戻した場合は未保存表示も解除される。
+        コストがあるので、編集の都度ではなく背景タイマーと閉じる確認の直前だけで呼ぶ。"""
+        dirty = (
+            self._toc_panel.get_toc() != self._toc_baseline
+            or self._page_label_panel.get_page_labels() != self._page_label_baseline
+        )
+        if dirty != self._unsaved:
+            self._unsaved = dirty
+            self._update_title()
+
     def _update_title(self) -> None:
         name = self._pdf_filename or "mopdf"
         prefix = "* " if self._unsaved else ""
@@ -391,16 +430,83 @@ class MainWindow(QMainWindow):
         if self._pdf_filename:
             self.setWindowTitle(f"{prefix}{name} — mopdf")
 
+    def _compute_diff_pairs(self):
+        """目次・ページラベルそれぞれの「変更前/変更後」ペアを計算する。
+        目次は diff_keys(階層・タイトル・物理ページ)で同一性を判定し、表示だけ
+        describe_entries(ラベル付き)を使う。これにより、ページラベルの割り当てだけを
+        変更した場合は目次側の変更として検出されない(実質同じ内容とみなす)。"""
+        toc_pairs = paired_diff(
+            self._toc_panel.diff_keys(self._toc_baseline),
+            self._toc_panel.diff_keys(self._toc_panel.get_toc()),
+            self._toc_panel.describe_entries(self._toc_baseline),
+            self._toc_panel.describe_entries(self._toc_panel.get_toc()),
+        )
+        label_pairs = paired_diff(
+            self._page_label_panel.describe_ranges(self._page_label_baseline),
+            self._page_label_panel.describe_ranges(self._page_label_panel.get_page_labels()),
+        )
+        return toc_pairs, label_pairs
+
+    @staticmethod
+    def _pairs_to_lines(pairs: list[tuple[Optional[str], Optional[str]]]) -> list[str]:
+        lines = []
+        for old, new in pairs:
+            if old is not None:
+                lines.append(f"- {old}")
+            if new is not None:
+                lines.append(f"+ {new}")
+        return lines
+
+    def _build_change_summary(self) -> str:
+        """未保存の変更点を「【目次】」「【ページラベル】」ごとの差分テキストにまとめる。"""
+        toc_pairs, label_pairs = self._compute_diff_pairs()
+        sections = []
+        if toc_pairs:
+            sections.append("【目次】\n" + "\n".join(self._pairs_to_lines(toc_pairs)))
+        if label_pairs:
+            sections.append("【ページラベル】\n" + "\n".join(self._pairs_to_lines(label_pairs)))
+        return "\n\n".join(sections)
+
+    def _show_changes_dialog(self) -> None:
+        """目次・ページラベルの変更点を「変更前/変更後」の左右比較モーダルで表示する。
+        メニューからいつでも呼べる他、閉じる確認ダイアログの「詳細を表示...」からも呼ばれる。"""
+        if self._unsaved:
+            self._recompute_unsaved_state()
+        toc_pairs, label_pairs = self._compute_diff_pairs()
+        ChangesDialog(toc_pairs, label_pairs, self).exec()
+
     def _confirm_discard(self) -> bool:
         """未保存の変更がある場合は確認ダイアログを出す。続行する場合True。"""
+        # アスタリスクは「触ったら即True」の軽量フラグなので、実際に閉じる直前だけ
+        # ベースラインとの内容比較を行って確定させる(何も変わっていなければ警告しない)。
+        if self._unsaved:
+            self._recompute_unsaved_state()
         if not self._unsaved:
             return True
-        reply = QMessageBox.question(
-            self, "未保存の変更",
-            "保存されていない変更があります。続けますか？",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-        )
-        return reply == QMessageBox.StandardButton.Yes
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Question)
+        box.setWindowTitle("未保存の変更")
+        box.setText("保存されていない変更があります。続けますか？")
+        summary = self._build_change_summary()
+        details_btn = None
+        if summary:
+            lines = summary.split("\n")
+            max_lines = 12
+            if len(lines) > max_lines:
+                box.setInformativeText("\n".join(lines[:max_lines]) + f"\n…ほか{len(lines) - max_lines}行")
+            else:
+                box.setInformativeText(summary)
+            details_btn = box.addButton("詳細を表示...", QMessageBox.ButtonRole.ActionRole)
+        yes_btn = box.addButton(QMessageBox.StandardButton.Yes)
+        no_btn = box.addButton(QMessageBox.StandardButton.No)
+        box.setDefaultButton(no_btn)
+        while True:
+            box.exec()
+            clicked = box.clickedButton()
+            if clicked is details_btn:
+                self._show_changes_dialog()
+                continue
+            return clicked is yes_btn
 
     # ------------------------------------------------------------------
     # ステータスバー

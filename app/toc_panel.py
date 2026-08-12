@@ -269,6 +269,32 @@ class TocPanel(QWidget):
             walk(self._tree.topLevelItem(i), 1)
         return result
 
+    def describe_entries(self, entries: list[TocEntry]) -> list[str]:
+        """差分表示用に、階層と実ページ表示付きの1行文字列に変換する(表示専用)。
+        インデントの2文字程度の差だけでは階層変更が分かりにくいため、"Lv.N"表記も付ける。"""
+        lines = []
+        for e in entries:
+            indent = "  " * (e.level - 1)
+            page_text = self._format_page_for_display(e.page)
+            lines.append(f"[Lv.{e.level}] {indent}{e.title} [{page_text}]")
+        return lines
+
+    def diff_keys(self, entries: list[TocEntry]) -> list[str]:
+        """差分の同一性判定用キー(CSVエクスポート相当: 階層・タイトル・物理ページのみ)。
+        ページラベルには依存しないため、ページラベルだけの変更を目次側の変更として検出しない。"""
+        return [f"{e.level}|{e.title}|{e.page}" for e in entries]
+
+    def _format_page_for_display(self, page0: Optional[int]) -> str:
+        """ステータスバーの実ページ表示と同じ形式(ラベル(物理/全体))で返す。"""
+        if page0 is None:
+            return "?"
+        phys = page0 + 1
+        if self._doc is None:
+            return str(phys)
+        total = self._doc.page_count
+        label = self._doc.get_page_label_for(page0)
+        return f"{label}({phys}/{total})" if label else f"{phys}/{total}"
+
     def add_entry_with_title(self, title: str, page_index: int,
                               insert_mode: str = INSERT_BELOW_SELECTED) -> None:
         """テキスト選択などから外部にエントリを追加する"""

@@ -286,7 +286,11 @@ class TocPanel(QWidget):
 
     def _build_tree_from_entries(self, entries: list[TocEntry]) -> None:
         self._pending_jump_item = None
+        # QTreeWidget.blockSignals() は itemChanged 等ウィジェット自身のシグナルしか止めず、
+        # rowsInserted/rowsRemoved/rowsMoved を出す内部モデル(model())は別オブジェクトなので
+        # 別途ブロックしないと、ツリー再構築のたびに toc_modified が発火してしまう。
         self._tree.blockSignals(True)
+        self._tree.model().blockSignals(True)
         self._tree.clear()
         stack: list[QTreeWidgetItem] = []
         for entry in entries:
@@ -301,6 +305,7 @@ class TocPanel(QWidget):
             stack.append(item)
         if entries:
             self._tree.expandAll()
+        self._tree.model().blockSignals(False)
         self._tree.blockSignals(False)
         self._update_button_states()
 
@@ -875,13 +880,25 @@ class TocPanel(QWidget):
         return text
 
     def _on_item_changed(self, item: QTreeWidgetItem, column: int) -> None:
-        if column == 1:
-            # SpinBoxデリゲートがUserRole+1に列1として書いた値を読み、列0のUserRole(ページ)に反映
-            page = item.data(1, Qt.ItemDataRole.UserRole + 1)
-            if page is not None:
-                item.setData(0, Qt.ItemDataRole.UserRole, None if page == -1 else page)
-                item.setData(1, Qt.ItemDataRole.UserRole + 1, None)
+        if column != 1:
+            # タイトル列(0)はQt側が値の変化を見て itemChanged を出すため、ここに来た時点で実変更がある
+            self._emit_modified()
+            return
+        # SpinBoxデリゲートがUserRole+1に列1として書いた値を読み、列0のUserRole(ページ)に反映。
+        # この一時ロールは使用後に毎回Noneへ戻すため、素通りさせると「値を変えずに確定」しただけで
+        # 前回値(None)との比較上は常に「変化あり」と判定されてしまう。実際のページ番号(列0)と
+        # 比較して、本当に変わった時だけ modified を出す。
+        raw = item.data(1, Qt.ItemDataRole.UserRole + 1)
+        if raw is None:
+            return
+        item.setData(1, Qt.ItemDataRole.UserRole + 1, None)
+        new_page = None if raw == -1 else raw
+        old_page = item.data(0, Qt.ItemDataRole.UserRole)
+        if new_page == old_page:
             self._refresh_page_label(item)
+            return
+        item.setData(0, Qt.ItemDataRole.UserRole, new_page)
+        self._refresh_page_label(item)
         self._emit_modified()
 
     def _emit_modified(self, *args) -> None:

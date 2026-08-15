@@ -135,8 +135,8 @@ class TocPanel(QWidget):
         self._btn_del    = self._make_btn("－", "選択したエントリを削除")
         self._btn_up     = self._make_btn("↑", "上へ移動")
         self._btn_down   = self._make_btn("↓", "下へ移動")
-        self._btn_left   = self._make_btn("←", "階層を上げる")
-        self._btn_right  = self._make_btn("→", "階層を下げる")
+        self._btn_left   = self._make_btn("←", "階層を上げる (Shift+Tab)")
+        self._btn_right  = self._make_btn("→", "階層を下げる (Tab)")
         for btn in [self._btn_add, self._btn_del, self._btn_up,
                     self._btn_down, self._btn_left, self._btn_right]:
             tb_layout.addWidget(btn)
@@ -171,7 +171,7 @@ class TocPanel(QWidget):
         tb_layout.addStretch()
         layout.addWidget(toolbar)
 
-        # ツリー（Shift+矢印: 複数選択, Cmd/Ctrl+矢印: 並び替え・階層変更, Alt+↑/↓: ページ表示追従）
+        # ツリー（Shift+矢印: 複数選択, Cmd/Ctrl+矢印・Tab/Shift+Tab: 並び替え・階層変更, Alt+↑/↓: ページ表示追従）
         self._tree = self._make_tree()
         self._tree.setHeaderHidden(True)
         self._tree.setColumnCount(2)
@@ -815,6 +815,20 @@ class TocPanel(QWidget):
                 urls = event.mimeData().urls()
                 if urls and urls[0].toLocalFile().lower().endswith(self._IMPORTABLE_EXTS):
                     self._import_toc_from_path(urls[0].toLocalFile())
+                    return True
+            elif etype == QEvent.Type.KeyPress:
+                # QWidget::event()はTab/Shift+TabをkeyPressEventに渡す前に
+                # focusNextPrevChild()でフォーカス移動させてしまうため、
+                # keyPressEventをオーバーライドしても階層変更が呼ばれない。
+                # event()より先に呼ばれるイベントフィルタで横取りする。
+                key = event.key()
+                mods = event.modifiers()
+                if key == Qt.Key.Key_Tab and not (mods & Qt.KeyboardModifier.ShiftModifier):
+                    self._indent_right()
+                    return True
+                if key == Qt.Key.Key_Backtab or (
+                        key == Qt.Key.Key_Tab and (mods & Qt.KeyboardModifier.ShiftModifier)):
+                    self._indent_left()
                     return True
         return super().eventFilter(obj, event)
 

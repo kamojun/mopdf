@@ -5,7 +5,8 @@ from PySide6.QtCore import Qt, QSize, QSettings, QTimer
 from PySide6.QtGui import QAction, QDragEnterEvent, QDropEvent, QShortcut, QKeySequence, QCursor
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QSplitter, QFileDialog,
-    QStatusBar, QLabel, QMessageBox, QMenu, QInputDialog
+    QStatusBar, QLabel, QMessageBox, QMenu, QInputDialog,
+    QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QStyle
 )
 
 from .pdf_document import PdfDocument, TocEntry, PageLabelRange
@@ -181,7 +182,7 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
 
     def _open_file_dialog(self) -> None:
-        if not self._confirm_discard():
+        if not self._confirm_discard("開く"):
             return
         path, _ = QFileDialog.getOpenFileName(
             self, "PDFを開く", "", "PDF Files (*.pdf)"
@@ -224,7 +225,7 @@ class MainWindow(QMainWindow):
             self._settings.setValue("recentFiles", self._recent_files)
             self._update_recent_menu()
             return
-        if not self._confirm_discard():
+        if not self._confirm_discard("開く"):
             return
         self.open_pdf(path)
 
@@ -255,9 +256,9 @@ class MainWindow(QMainWindow):
     # 保存
     # ------------------------------------------------------------------
 
-    def _save(self) -> None:
+    def _save(self) -> bool:
         if not self._doc.is_open:
-            return
+            return False
         toc = self._toc_panel.get_toc()
         self._doc.set_toc(toc)
         labels = self._page_label_panel.get_page_labels()
@@ -266,11 +267,12 @@ class MainWindow(QMainWindow):
             self._doc.save()
         except Exception as e:
             QMessageBox.critical(self, "保存エラー", f"保存に失敗しました:\n{e}")
-            return
+            return False
         self._toc_baseline = toc
         self._page_label_baseline = labels
         self._unsaved = False
         self._update_title()
+        return True
 
     def _save_as(self) -> None:
         if not self._doc.is_open:
@@ -393,7 +395,7 @@ class MainWindow(QMainWindow):
     def dropEvent(self, event: QDropEvent) -> None:
         urls = event.mimeData().urls()
         if urls:
-            if not self._confirm_discard():
+            if not self._confirm_discard("開く"):
                 return
             self.open_pdf(urls[0].toLocalFile())
 
@@ -539,38 +541,87 @@ class MainWindow(QMainWindow):
         toc_pairs, label_pairs = self._compute_diff_pairs()
         ChangesDialog(toc_pairs, label_pairs, self).exec()
 
-    def _confirm_discard(self) -> bool:
-        """未保存の変更がある場合は確認ダイアログを出す。続行する場合True。"""
+    def _confirm_discard(self, action_label: str = "閉じる") -> bool:
+        """未保存の変更がある場合は確認ダイアログを出す。続行する場合True。
+        action_label は「保存して{action_label}」のように文言に埋め込む動詞
+        (例: closeEventからは「閉じる」、別のPDFを開く系の呼び出しからは「開く」)。"""
         # アスタリスクは「触ったら即True」の軽量フラグなので、実際に閉じる直前だけ
         # ベースラインとの内容比較を行って確定させる(何も変わっていなければ警告しない)。
         if self._unsaved:
             self._recompute_unsaved_state()
         if not self._unsaved:
             return True
-        box = QMessageBox(self)
-        box.setIcon(QMessageBox.Icon.Question)
-        box.setWindowTitle("未保存の変更")
-        box.setText("保存されていない変更があります。続けますか？")
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("未保存の変更")
+        layout = QVBoxLayout(dialog)
+
+        top_row = QHBoxLayout()
+        icon_label = QLabel()
+        icon_pixmap = self.style().standardIcon(
+            QStyle.StandardPixmap.SP_MessageBoxQuestion
+        ).pixmap(32, 32)
+        icon_label.setPixmap(icon_pixmap)
+        icon_label.setAlignment(Qt.AlignmentFlag.AlignTop)
+        top_row.addWidget(icon_label)
+
+        text_col = QVBoxLayout()
+        message_label = QLabel("保存されていない変更があります。続けますか？")
+        message_label.setWordWrap(True)
+        text_col.addWidget(message_label)
+
         summary = self._build_change_summary()
-        details_btn = None
         if summary:
             lines = summary.split("\n")
             max_lines = 12
             if len(lines) > max_lines:
-                box.setInformativeText("\n".join(lines[:max_lines]) + f"\n…ほか{len(lines) - max_lines}行")
+                shown = "\n".join(lines[:max_lines]) + f"\n…ほか{len(lines) - max_lines}行"
             else:
-                box.setInformativeText(summary)
-            details_btn = box.addButton("詳細を表示...", QMessageBox.ButtonRole.ActionRole)
-        yes_btn = box.addButton(QMessageBox.StandardButton.Yes)
-        no_btn = box.addButton(QMessageBox.StandardButton.No)
-        box.setDefaultButton(no_btn)
-        while True:
-            box.exec()
-            clicked = box.clickedButton()
-            if clicked is details_btn:
-                self._show_changes_dialog()
-                continue
-            return clicked is yes_btn
+                shown = summary
+            summary_label = QLabel(shown)
+            summary_label.setWordWrap(True)
+            text_col.addWidget(summary_label)
+        top_row.addLayout(text_col, 1)
+        layout.addLayout(top_row)
+
+        if summary:
+            details_row = QHBoxLayout()
+            details_row.setContentsMargins(24, 4, 0, 0)
+            details_btn = QPushButton("詳細表示")
+            details_btn.setFlat(True)
+            details_btn.setStyleSheet("font-size: 11px; padding: 2px 8px;")
+            details_btn.clicked.connect(self._show_changes_dialog)
+            details_row.addWidget(details_btn)
+            details_row.addStretch(1)
+            layout.addLayout(details_row)
+
+        layout.addSpacing(8)
+        btn_row = QHBoxLayout()
+        btn_row.addStretch(1)
+        cancel_btn = QPushButton("キャンセル")
+        discard_btn = QPushButton(f"保存せずに{action_label}")
+        save_btn = QPushButton(f"保存して{action_label}")
+        save_btn.setDefault(True)
+        save_btn.setAutoDefault(True)
+        for btn in (cancel_btn, discard_btn, save_btn):
+            btn_row.addWidget(btn)
+        layout.addLayout(btn_row)
+        dialog.setMinimumWidth(380)
+
+        result = {"action": "cancel"}
+
+        def choose(action: str) -> None:
+            result["action"] = action
+            dialog.accept()
+
+        cancel_btn.clicked.connect(lambda: choose("cancel"))
+        discard_btn.clicked.connect(lambda: choose("discard"))
+        save_btn.clicked.connect(lambda: choose("save"))
+
+        dialog.exec()
+        if result["action"] == "save":
+            return self._save()
+        return result["action"] == "discard"
 
     # ------------------------------------------------------------------
     # ステータスバー

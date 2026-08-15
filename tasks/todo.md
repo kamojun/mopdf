@@ -127,4 +127,13 @@
 - [x] `_move_up`/`_move_down`を`_move_selected(delta)`に統合し、`_indent_left`/`_indent_right`と同様に複数選択（`_selected_root_items()`）に対応。親ごとにグループ化し、境界(boundary)を追跡しながら塊として1段ずつ動かすアルゴリズムを追加（新規ヘルパー`_container_ops(parent)`でQTreeWidgetItemとQTreeWidgetトップレベルのメソッド差異を吸収）
 - [x] `keyPressEvent`: Shiftブロックを削除しネイティブの範囲選択・展開折りたたみに委譲。Ctrlブロックを新設し並び替え・階層変更（Up/Down/Left/Right）を割り当て。Altブロックを新設し、Up/Downでネイティブ移動後に`page_jump_requested`を直接emit。Shift+Enter（挿入）のみ維持
 - [x] **既存バグを発見・修正**: `_select_items`の末尾`setCurrentItem(items[-1])`が、ツリーがフォーカスを持つ状態では複数選択を1件に潰してしまう（Qtの既定挙動）。`QItemSelectionModel.SelectionFlag.NoUpdate`を渡すよう修正し、`_indent_left`/`_indent_right`の複数選択後の選択保持も合わせて直った
+
+## 閉じる時の確認ダイアログを3択+詳細表示に変更 ✅
+
+**背景**: `_confirm_discard()`が`QMessageBox`の「はい/いいえ」＋「詳細を表示...」のみで、実際に保存する手段がなく「Yes/Noが何を意味するか分かりにくい」との指摘。「保存して閉じる」「保存せずに閉じる」「キャンセル」の3択＋独立した「詳細表示」に作り直した（デザインはユーザー確認済み、Mac風=右端が「保存して閉じる」で強調/デフォルト）。同じ`_confirm_discard()`を使う「別のPDFを開く」系3箇所にも波及するため、ボタン文言の動詞を呼び出し元で切り替え可能にした。
+
+- [x] `_save()`をbool返却に変更（成功True/失敗・未オープンFalse）。既存の「保存」メニューへの影響なし
+- [x] `_confirm_discard(action_label: str = "閉じる")`に変更。`QMessageBox`ではなく独自`QDialog`を組み立て、ボタン順序(キャンセル/保存せずに{action_label}/保存して{action_label})と「詳細表示」の小さめ・独立配置(左寄せ・上段)を確実に制御（QMessageBoxのButtonRole自動レイアウトはプラットフォーム依存で確実な制御ができないため採用しなかった）
+- [x] `_open_file_dialog`/`_open_recent`/`dropEvent`に`_confirm_discard("開く")`を渡し、「保存して開く」「保存せずに開く」に文言を統一
+- [x] 実機確認: スクリーンショットでボタン並び・詳細表示の位置/サイズを確認。プログラム的にボタンクリックを発火させ、詳細表示→ChangesDialog表示→確認ダイアログ継続、保存して閉じる→実際に保存されbaseline/`_unsaved`がリセット、action_label="開く"でのボタン文言切り替えをそれぞれ確認
 - [x] 実GUI（`PySide6.QtTest`で実キー入力、`QT_QPA_PLATFORM=offscreen`）で以下を確認: 無修飾矢印はジャンプなし / Alt+↑↓はカーソル移動+ジャンプ / Shift+↑↓は範囲選択のみで並び替えなし / Ctrl+↑↓は複数選択を親ごとに独立して一括移動（境界での停止、親をまたぐ場合の独立動作を含む）/ Ctrl+←→で階層変更 / Shift+Enterの挿入維持 / Ctrl+Zでundo

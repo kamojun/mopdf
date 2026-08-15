@@ -18,6 +18,7 @@ from .changes_dialog import ChangesDialog, paired_diff
 class MainWindow(QMainWindow):
     _MAX_RECENT = 10
     _UNSAVED_CHECK_INTERVAL_MS = 5000  # 未保存アスタリスクをバックグラウンドで確認する間隔
+    _LABEL_CHANGE_DEBOUNCE_MS = 700  # ページラベル連続編集をまとめるデバウンス間隔
 
     def __init__(self) -> None:
         super().__init__()
@@ -30,6 +31,8 @@ class MainWindow(QMainWindow):
         self._settings = QSettings("mopdf", "mopdf")
         self._recent_files: list[str] = self._settings.value("recentFiles", [], type=list)
         self._select_mode_active: bool = False  # テキスト選択モードが有効かどうか
+        self._pending_old_label_texts: Optional[dict[int, str]] = None
+        self._pending_old_page_labels: Optional[list[PageLabelRange]] = None
 
         self._setup_ui()
         self._setup_menu()
@@ -39,6 +42,13 @@ class MainWindow(QMainWindow):
         self._unsaved_check_timer.setInterval(self._UNSAVED_CHECK_INTERVAL_MS)
         self._unsaved_check_timer.timeout.connect(self._periodic_unsaved_check)
         self._unsaved_check_timer.start()
+
+        # ページラベル編集は複数フィールドにまたがって連続発火しうるため、
+        # 一連の編集が落ち着いてから1回だけ「表示を保つか」を確認する
+        self._label_change_timer = QTimer(self)
+        self._label_change_timer.setSingleShot(True)
+        self._label_change_timer.setInterval(self._LABEL_CHANGE_DEBOUNCE_MS)
+        self._label_change_timer.timeout.connect(self._process_pending_label_change)
 
     # ------------------------------------------------------------------
     # UI構築
@@ -393,11 +403,65 @@ class MainWindow(QMainWindow):
 
     def _on_page_labels_modified(self) -> None:
         if self._doc.is_open:
+            if self._pending_old_label_texts is None:
+                self._pending_old_label_texts = self._snapshot_toc_label_texts()
+                self._pending_old_page_labels = self._doc.get_page_labels()
             self._doc.set_page_labels(self._page_label_panel.get_page_labels())
             self._viewer.refresh_page_labels()
             self._toc_panel.refresh_page_labels()
             self._update_status(self._current_page)
+            self._label_change_timer.start()
         self._mark_unsaved()
+
+    def _snapshot_toc_label_texts(self) -> dict[int, str]:
+        """目次エントリが指す各物理ページの、変更前のページラベル表示テキストを記録する。"""
+        pages = {e.page for e in self._toc_panel.get_toc() if e.page is not None}
+        return {p: self._doc.get_page_label_for(p) for p in pages}
+
+    def _process_pending_label_change(self) -> None:
+        """ページラベル編集が一段落した後、目次の表示が変わったエントリがあれば
+        物理ページを移動して表示を保つかどうかを確認する。"""
+        old_texts = self._pending_old_label_texts
+        old_page_labels = self._pending_old_page_labels
+        self._pending_old_label_texts = None
+        self._pending_old_page_labels = None
+        if not old_texts or not self._doc.is_open:
+            return
+        page_map: dict[int, int] = {}
+        for old_page, old_text in old_texts.items():
+            if not old_text:
+                continue  # ラベル未設定ページはfind_page_by_labelが誤マッチしうるため除外
+            if self._doc.get_page_label_for(old_page) == old_text:
+                continue  # このページの表示は変わっていない
+            candidate = self._doc.find_page_by_label(old_text)
+            if candidate >= 0:
+                page_map[old_page] = candidate
+        if not page_map:
+            return
+        box = QMessageBox(self)
+        box.setWindowTitle("ページラベルの変更")
+        box.setText(
+            f"ページラベルの変更により、目次の{len(page_map)}件のページ表示が変わります。"
+        )
+        btn_update = box.addButton("更新する", QMessageBox.ButtonRole.AcceptRole)
+        btn_keep = box.addButton("ページ番号を維持する", QMessageBox.ButtonRole.ActionRole)
+        btn_cancel = box.addButton("キャンセル", QMessageBox.ButtonRole.RejectRole)
+        box.setDefaultButton(btn_update)
+        box.exec()
+        clicked = box.clickedButton()
+        if clicked is btn_keep:
+            self._toc_panel.remap_entry_pages(page_map)
+        elif clicked is btn_cancel:
+            self._revert_page_labels(old_page_labels)
+
+    def _revert_page_labels(self, old_page_labels: list[PageLabelRange]) -> None:
+        """ページラベル編集をキャンセルし、編集前の状態に戻す。"""
+        self._doc.set_page_labels(old_page_labels)
+        self._page_label_panel._rebuild()
+        self._viewer.refresh_page_labels()
+        self._toc_panel.refresh_page_labels()
+        self._update_status(self._current_page)
+        self._recompute_unsaved_state()
 
     def _mark_unsaved(self) -> None:
         if not self._unsaved:

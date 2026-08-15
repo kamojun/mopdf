@@ -382,6 +382,31 @@ class TocPanel(QWidget):
         item.setTextAlignment(1, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         item.setText(1, self._get_page_display_text(page))
 
+    def remap_entry_pages(self, page_map: dict[int, int]) -> None:
+        """旧物理ページ→新物理ページのマッピングに従い、該当エントリの物理ページを更新する。
+        ページラベル変更時に「表示を保つ」を選んだ場合に main_window から呼ばれる。"""
+        if not page_map:
+            return
+        self._push_history()
+        self._tree.blockSignals(True)
+        self._disconnect_toc_signals()
+
+        def walk(item: QTreeWidgetItem) -> None:
+            old_page = item.data(0, Qt.ItemDataRole.UserRole)
+            if old_page in page_map:
+                item.setData(0, Qt.ItemDataRole.UserRole, page_map[old_page])
+                self._refresh_page_label(item)
+            for i in range(item.childCount()):
+                walk(item.child(i))
+
+        try:
+            for i in range(self._tree.topLevelItemCount()):
+                walk(self._tree.topLevelItem(i))
+        finally:
+            self._reconnect_toc_signals()
+            self._tree.blockSignals(False)
+        self._emit_modified()
+
     # ------------------------------------------------------------------
     # アンドゥ
     # ------------------------------------------------------------------

@@ -1,5 +1,15 @@
 # 学びの記録
 
+## 2026-08-15
+
+### QTreeWidgetで`model().blockSignals(True)`を使うとQt内部配線ごと止まりクラッシュする
+
+- **状況**: 「400ページくらいの目次付きPDFの上に6ページのPDFをドロップすると落ちる」という再現性ありのセグフォルト報告。`~/Library/Logs/DiagnosticReports/`の`.ips`クラッシュレポートを解析すると、`QTreeView::viewportEvent`→`QAbstractItemDelegate::helpEvent`（ツールチップ処理）で`EXC_BAD_ACCESS`（"possible pointer authentication failure" = ダングリングポインタ疑い）だった。fitz(PyMuPDF)側の問題ではなかった
+- **原因**: `toc_panel.py`の`_build_tree_from_entries`が、自前のシグナル(`itemChanged`, `rowsInserted/rowsRemoved/rowsMoved`)を止める目的で`self._tree.model().blockSignals(True)`を使っていた。しかしこれは自前のシグナルだけでなく、Qt内部で`QTreeView`（`QAbstractItemView`）がホバー中の項目（ツールチップ判定用）などの内部状態を無効化するために listen している内部配線まで止めてしまう。大きい目次を`clear()`した際、内部状態が更新されないまま、少し遅れて配送されるツールチップの`QHelpEvent`が削除済みの`QTreeWidgetItem`を参照してクラッシュした
+- **修正**: `model().blockSignals()`をやめ、自前で登録しているハンドラ(`rowsInserted/rowsRemoved/rowsMoved`→`_emit_modified`)だけを一時的に`disconnect`/`reconnect`する方式に変更（`itemChanged`は`self._tree.blockSignals()`で足りる。こちらはウィジェット自身の外部向けシグナルのみで、Qt内部配線とは別物なので安全）
+- **ルール**: `QTreeWidget`/`QTableWidget`などの`.model()`が返す内部モデルに対して`blockSignals(True)`を使わない。自前のシグナルだけ止めたいなら、そのシグナル/スロットの組を個別に`disconnect`/`reconnect`する。ウィジェット自身への`blockSignals()`（`itemChanged`等の外部向け便利シグナルのみ）は問題ない
+- **副次的な学び**: セグフォルトの原因調査は、まず`~/Library/Logs/DiagnosticReports/`の`.ips`クラッシュレポートを確認する。シンボリケート済みのスタックトレースが残っており、`json.loads`で2番目の行（改行区切り）をパースすれば`faultingThread`のフレーム一覧が読める。的外れな仮説（このときは先にMuPDFのマルチスレッド競合を疑ったが、ヘッドレスのストレステストで再現せず、クラッシュレポートを見て初めてQTreeWidget側だと判明した）で消耗する前に、まずログを見るべきだった
+
 ## 2026-06-07
 
 ### QVBoxLayout.setAlignment(AlignHCenter) はサイズ不揃いの大量ウィジェットでレイアウトを壊す

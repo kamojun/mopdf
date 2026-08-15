@@ -100,6 +100,16 @@
   4. クリック直後に「#」連続入力モードを起動→ジャンプが起きない
   5. 既存の連続入力モード（Enter連続移動・増分提案）に回帰がないことを再確認
 
+## 大きいPDFに小さいPDFをドロップするとクラッシュする問題を修正 ✅
+
+**背景**: 400ページ程度の目次付きPDFの上に6ページのPDFをドロップすると再現性のあるセグフォルトが発生。詳細は`tasks/lessons.md`の同日エントリを参照。
+
+- [x] `~/Library/Logs/DiagnosticReports/`のクラッシュレポート(.ips)を解析し、`QTreeView::viewportEvent`→`QAbstractItemDelegate::helpEvent`での`EXC_BAD_ACCESS`と特定
+- [x] `toc_panel.py`: `_build_tree_from_entries`/`remap_entry_pages`の`self._tree.model().blockSignals(True/False)`を、自前ハンドラ(`rowsInserted/rowsRemoved/rowsMoved`)のみを対象にした`disconnect`/`reconnect`方式に変更
+- [x] headless(offscreen QPA)テストで、再構築中に`toc_modified`が過剰発火しないこと・通常編集では発火することを確認
+- [x] 実機確認: 同じ手順でクラッシュしなくなったことを確認済み
+- [x] 予防的修正: `pdf_document.py`/`render_worker.py`の全fitz呼び出しを`FITZ_LOCK`(`threading.RLock`)で直列化（今回のクラッシュの直接原因ではないが、MuPDFのスレッド安全性のリスクを潰す保険）
+
 ## 目次ツリーの矢印キー修飾子を再設計 ✅
 
 **背景**: Shift+矢印が「並び替え・階層変更」に割り当てられていたが、ツリーは既に`ExtendedSelection`モードであり、Shift+矢印はQtの標準慣習では「複数選択の範囲拡張」であるべきという指摘から再設計。役割分担をShift=複数選択、Cmd(Ctrl)=編集操作、Alt+↑/↓=ページ表示追従に変更。

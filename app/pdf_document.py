@@ -1,9 +1,15 @@
 from __future__ import annotations
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 import fitz  # PyMuPDF
 from PySide6.QtGui import QImage
+
+# MuPDFはスレッド間で同時にドキュメントを開閉・レンダリングすると内部状態が
+# 競合してクラッシュしうるため、fitzを触る処理は全てこのロックで直列化する
+# (RenderWorkerのバックグラウンド描画とメインスレッドのopen/close競合が典型例)。
+FITZ_LOCK = threading.RLock()
 
 
 @dataclass
@@ -53,102 +59,110 @@ class PdfDocument:
         return self._doc.page_count
 
     def open(self, path: str | Path) -> None:
-        if self._doc is not None:
-            self._doc.close()
-        self._path = Path(path)
-        self._doc = fitz.open(str(self._path))
+        with FITZ_LOCK:
+            if self._doc is not None:
+                self._doc.close()
+            self._path = Path(path)
+            self._doc = fitz.open(str(self._path))
 
     def close(self) -> None:
-        if self._doc is not None:
-            self._doc.close()
-            self._doc = None
-            self._path = None
+        with FITZ_LOCK:
+            if self._doc is not None:
+                self._doc.close()
+                self._doc = None
+                self._path = None
 
     # ------------------------------------------------------------------
     # 目次 (TOC / Bookmarks)
     # ------------------------------------------------------------------
 
     def get_toc(self) -> list[TocEntry]:
-        if self._doc is None:
-            return []
-        raw = self._doc.get_toc(simple=False)
-        entries = []
-        for item in raw:
-            level, title, page, dest = item[0], item[1], item[2], item[3]
-            entries.append(TocEntry(
-                level=level,
-                title=title,
-                page=page - 1,  # PyMuPDFは1-indexed, 内部は0-indexed
-                dest=dest if isinstance(dest, dict) else {},
-            ))
-        return entries
+        with FITZ_LOCK:
+            if self._doc is None:
+                return []
+            raw = self._doc.get_toc(simple=False)
+            entries = []
+            for item in raw:
+                level, title, page, dest = item[0], item[1], item[2], item[3]
+                entries.append(TocEntry(
+                    level=level,
+                    title=title,
+                    page=page - 1,  # PyMuPDFは1-indexed, 内部は0-indexed
+                    dest=dest if isinstance(dest, dict) else {},
+                ))
+            return entries
 
     def set_toc(self, entries: list[TocEntry]) -> None:
-        if self._doc is None:
-            return
-        raw = []
-        for e in entries:
-            if e.page is None:
-                continue  # 未設定のエントリはPDFに書き込まない
-            dest = e.dest if e.dest else {"kind": fitz.LINK_GOTO, "page": e.page, "to": fitz.Point(0, 0)}
-            raw.append([e.level, e.title, e.page + 1, dest])
-        self._doc.set_toc(raw)
+        with FITZ_LOCK:
+            if self._doc is None:
+                return
+            raw = []
+            for e in entries:
+                if e.page is None:
+                    continue  # 未設定のエントリはPDFに書き込まない
+                dest = e.dest if e.dest else {"kind": fitz.LINK_GOTO, "page": e.page, "to": fitz.Point(0, 0)}
+                raw.append([e.level, e.title, e.page + 1, dest])
+            self._doc.set_toc(raw)
 
     # ------------------------------------------------------------------
     # ページラベル
     # ------------------------------------------------------------------
 
     def get_page_labels(self) -> list[PageLabelRange]:
-        if self._doc is None:
-            return []
-        try:
-            raw = self._doc.get_page_labels()
-        except Exception:
-            return []
-        result = []
-        for item in raw:
-            result.append(PageLabelRange(
-                start_page=item.get("startpage", 0),
-                style=item.get("style", "D"),
-                prefix=item.get("prefix", ""),
-                first_num=item.get("firstpagenum", 1),
-            ))
-        return result
+        with FITZ_LOCK:
+            if self._doc is None:
+                return []
+            try:
+                raw = self._doc.get_page_labels()
+            except Exception:
+                return []
+            result = []
+            for item in raw:
+                result.append(PageLabelRange(
+                    start_page=item.get("startpage", 0),
+                    style=item.get("style", "D"),
+                    prefix=item.get("prefix", ""),
+                    first_num=item.get("firstpagenum", 1),
+                ))
+            return result
 
     def set_page_labels(self, ranges: list[PageLabelRange]) -> None:
-        if self._doc is None:
-            return
-        raw = []
-        for r in ranges:
-            raw.append({
-                "startpage": r.start_page,
-                "style": r.style,
-                "prefix": r.prefix,
-                "firstpagenum": r.first_num,
-            })
-        self._doc.set_page_labels(raw)
+        with FITZ_LOCK:
+            if self._doc is None:
+                return
+            raw = []
+            for r in ranges:
+                raw.append({
+                    "startpage": r.start_page,
+                    "style": r.style,
+                    "prefix": r.prefix,
+                    "firstpagenum": r.first_num,
+                })
+            self._doc.set_page_labels(raw)
 
     def get_page_label_for(self, page_index: int) -> str:
         """0-indexedの物理ページ番号から論理ページラベルを返す"""
-        if self._doc is None:
-            return str(page_index + 1)
-        try:
-            return self._doc[page_index].get_label()
-        except Exception:
-            return ""
+        with FITZ_LOCK:
+            if self._doc is None:
+                return str(page_index + 1)
+            try:
+                return self._doc[page_index].get_label()
+            except Exception:
+                return ""
 
     def find_page_by_label(self, label: str) -> int:
         """ページラベル文字列から0-indexed物理ページ番号を返す。見つからなければ-1。"""
-        if self._doc is None:
+        with FITZ_LOCK:
+            if self._doc is None:
+                return -1
+            label = label.strip()
+            for i in range(self._doc.page_count):
+                try:
+                    if self._doc[i].get_label() == label:
+                        return i
+                except Exception:
+                    pass
             return -1
-        label = label.strip()
-        for i in range(self._doc.page_count):
-            try:
-                if self._doc[i].get_label() == label:
-                    return i
-            except Exception:
-                pass
-        return -1
 
     # ------------------------------------------------------------------
     # レンダリング
@@ -156,57 +170,63 @@ class PdfDocument:
 
     def get_page_size(self, page_index: int, zoom: float = 1.5) -> tuple[int, int]:
         """レンダリングせずにページの幅・高さ（px）を返す"""
-        if self._doc is None:
-            return (0, 0)
-        rect = self._doc[page_index].rect
-        return (int(rect.width * zoom), int(rect.height * zoom))
+        with FITZ_LOCK:
+            if self._doc is None:
+                return (0, 0)
+            rect = self._doc[page_index].rect
+            return (int(rect.width * zoom), int(rect.height * zoom))
 
     def get_all_page_sizes(self, zoom: float = 1.5) -> list[tuple[int, int]]:
         """全ページのサイズを一括取得する（ループ1回で済む）"""
-        if self._doc is None:
-            return []
-        return [(int(p.rect.width * zoom), int(p.rect.height * zoom)) for p in self._doc]
+        with FITZ_LOCK:
+            if self._doc is None:
+                return []
+            return [(int(p.rect.width * zoom), int(p.rect.height * zoom)) for p in self._doc]
 
     def get_text_in_rect(self, page_index: int, rect_px: tuple[float, float, float, float], zoom: float) -> str:
         """ピクセル座標の矩形内のテキストを抽出する。rect_px=(x0,y0,x1,y1)"""
-        if self._doc is None:
-            return ""
-        x0, y0, x1, y1 = rect_px
-        pdf_rect = fitz.Rect(x0 / zoom, y0 / zoom, x1 / zoom, y1 / zoom)
-        try:
-            return self._doc[page_index].get_textbox(pdf_rect).strip()
-        except Exception:
-            return ""
+        with FITZ_LOCK:
+            if self._doc is None:
+                return ""
+            x0, y0, x1, y1 = rect_px
+            pdf_rect = fitz.Rect(x0 / zoom, y0 / zoom, x1 / zoom, y1 / zoom)
+            try:
+                return self._doc[page_index].get_textbox(pdf_rect).strip()
+            except Exception:
+                return ""
 
     def render_page(self, page_index: int, zoom: float = 1.5) -> QImage:
-        if self._doc is None:
-            raise RuntimeError("No document open")
-        page = self._doc[page_index]
-        mat = fitz.Matrix(zoom, zoom)
-        pix = page.get_pixmap(matrix=mat, alpha=False)
-        img = QImage(pix.samples, pix.width, pix.height, pix.stride, QImage.Format.Format_RGB888)
-        return img.copy()  # detach from pix lifetime
+        with FITZ_LOCK:
+            if self._doc is None:
+                raise RuntimeError("No document open")
+            page = self._doc[page_index]
+            mat = fitz.Matrix(zoom, zoom)
+            pix = page.get_pixmap(matrix=mat, alpha=False)
+            img = QImage(pix.samples, pix.width, pix.height, pix.stride, QImage.Format.Format_RGB888)
+            return img.copy()  # detach from pix lifetime
 
     # ------------------------------------------------------------------
     # 保存
     # ------------------------------------------------------------------
 
     def save(self, path: str | Path | None = None) -> None:
-        if self._doc is None:
-            return
-        target = Path(path) if path else self._path
-        if target == self._path:
-            try:
-                self._doc.save(str(target), incremental=True, encryption=fitz.PDF_ENCRYPT_KEEP)
-            except Exception:
-                # 修復済みPDFなどインクリメンタル書き込み不可の場合はフルリライト
+        with FITZ_LOCK:
+            if self._doc is None:
+                return
+            target = Path(path) if path else self._path
+            if target == self._path:
+                try:
+                    self._doc.save(str(target), incremental=True, encryption=fitz.PDF_ENCRYPT_KEEP)
+                except Exception:
+                    # 修復済みPDFなどインクリメンタル書き込み不可の場合はフルリライト
+                    self._full_rewrite(target)
+            else:
                 self._full_rewrite(target)
-        else:
-            self._full_rewrite(target)
 
     def _full_rewrite(self, target: Path) -> None:
         """一時ファイル経由でアトミックにフルリライトする。
         garbage=4 で xref を完全再構築し、破損を引き継がない。
+        呼び出し元(save)が既にFITZ_LOCKを保持している前提。
         """
         import tempfile, os
         fd, tmp_path = tempfile.mkstemp(suffix=".pdf", dir=target.parent)

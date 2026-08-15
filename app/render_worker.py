@@ -4,6 +4,8 @@ import fitz
 from PySide6.QtCore import QObject, QRunnable, Signal
 from PySide6.QtGui import QImage
 
+from .pdf_document import FITZ_LOCK
+
 
 class RenderSignals(QObject):
     finished = Signal(int, QImage, int)  # (page_index, image, generation)
@@ -23,21 +25,25 @@ class RenderWorker(QRunnable):
     def run(self) -> None:
         if self._cancel.is_set():
             return
-        try:
-            doc = fitz.open(self._path)
-        except Exception:
-            return
-        try:
-            if self._page_index >= doc.page_count:
+        # MuPDFはスレッド間で同時にドキュメントを開閉・レンダリングすると
+        # 内部状態が競合してクラッシュしうるため、メインスレッド側の
+        # PdfDocument操作と同じロックで直列化する。
+        with FITZ_LOCK:
+            try:
+                doc = fitz.open(self._path)
+            except Exception:
                 return
-            page = doc[self._page_index]
-            mat = fitz.Matrix(self._zoom, self._zoom)
-            pix = page.get_pixmap(matrix=mat, alpha=False)
-            img = QImage(pix.samples, pix.width, pix.height,
-                         pix.stride, QImage.Format.Format_RGB888).copy()
-        except Exception:
-            return
-        finally:
-            doc.close()
+            try:
+                if self._page_index >= doc.page_count:
+                    return
+                page = doc[self._page_index]
+                mat = fitz.Matrix(self._zoom, self._zoom)
+                pix = page.get_pixmap(matrix=mat, alpha=False)
+                img = QImage(pix.samples, pix.width, pix.height,
+                             pix.stride, QImage.Format.Format_RGB888).copy()
+            except Exception:
+                return
+            finally:
+                doc.close()
         if not self._cancel.is_set():
             self.signals.finished.emit(self._page_index, img, self._generation)

@@ -310,29 +310,43 @@ class TocPanel(QWidget):
         entries = self._doc.get_toc() if self._doc else []
         self._build_tree_from_entries(entries)
 
+    def _disconnect_toc_signals(self) -> None:
+        """内部モデルの rowsInserted/rowsRemoved/rowsMoved を一時的に切り離す。
+        model().blockSignals()は使わない: Qt内部でQAbstractItemViewがホバー
+        インデックス(ツールチップ判定用)などを無効化するために listen している
+        内部配線まで止めてしまい、clear()後に配送される QHelpEvent が削除済みの
+        QTreeWidgetItemを参照してクラッシュする(ダングリングポインタ)ため。"""
+        self._tree.model().rowsInserted.disconnect(self._emit_modified)
+        self._tree.model().rowsRemoved.disconnect(self._emit_modified)
+        self._tree.model().rowsMoved.disconnect(self._emit_modified)
+
+    def _reconnect_toc_signals(self) -> None:
+        self._tree.model().rowsInserted.connect(self._emit_modified)
+        self._tree.model().rowsRemoved.connect(self._emit_modified)
+        self._tree.model().rowsMoved.connect(self._emit_modified)
+
     def _build_tree_from_entries(self, entries: list[TocEntry]) -> None:
         self._pending_jump_item = None
-        # QTreeWidget.blockSignals() は itemChanged 等ウィジェット自身のシグナルしか止めず、
-        # rowsInserted/rowsRemoved/rowsMoved を出す内部モデル(model())は別オブジェクトなので
-        # 別途ブロックしないと、ツリー再構築のたびに toc_modified が発火してしまう。
         self._tree.blockSignals(True)
-        self._tree.model().blockSignals(True)
-        self._tree.clear()
-        stack: list[QTreeWidgetItem] = []
-        for entry in entries:
-            item = self._make_item(entry.title, entry.page)
-            depth = entry.level - 1
-            while len(stack) > depth:
-                stack.pop()
-            if stack:
-                stack[-1].addChild(item)
-            else:
-                self._tree.addTopLevelItem(item)
-            stack.append(item)
-        if entries:
-            self._tree.expandAll()
-        self._tree.model().blockSignals(False)
-        self._tree.blockSignals(False)
+        self._disconnect_toc_signals()
+        try:
+            self._tree.clear()
+            stack: list[QTreeWidgetItem] = []
+            for entry in entries:
+                item = self._make_item(entry.title, entry.page)
+                depth = entry.level - 1
+                while len(stack) > depth:
+                    stack.pop()
+                if stack:
+                    stack[-1].addChild(item)
+                else:
+                    self._tree.addTopLevelItem(item)
+                stack.append(item)
+            if entries:
+                self._tree.expandAll()
+        finally:
+            self._reconnect_toc_signals()
+            self._tree.blockSignals(False)
         self._update_button_states()
 
     def _get_page_display_text(self, page0: Optional[int]) -> str:

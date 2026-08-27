@@ -178,6 +178,16 @@
 - [ ] `assets/icon.png`が仮アイコン（角丸正方形+"mo"）のまま。本アイコンができたら差し替えて`scripts/make_icon.py`を再実行する
 - [ ] 配布用`.app`が未署名でGatekeeper警告が出る。Apple Developer証明書での署名・notarizationを行う
 
+## ショートカット一覧表示 ✅
+
+**背景**: キーボードショートカットが増えてきたが一覧できる場所がなかった。実装時に「ショートカットを変えたら一覧側も直し忘れる」二重管理を避けるため、メニュー由来のものは`QAction`から実行時に自動収集し、目次ツリー/ページラベル表のような生の`keyPressEvent`/`eventFilter`で実装されているキー操作だけは実装のすぐ隣に唯一の説明リストを置いてダイアログがそれをimportする方針にした（目次ツリーの入力処理はTab横取り回避などQtの癖に対処した壊れやすいコードで過去にsegfaultも起きているため、`QAction`化などロジック自体には手を入れない）。
+
+- [x] `toc_panel.py`: `_make_tree`直上に`TocPanel.TREE_SHORTCUTS_HELP`（クラス属性）を追加
+- [x] `page_label_panel.py`: `eventFilter`直上に`PageLabelPanel.TABLE_SHORTCUTS_HELP`（クラス属性）を追加
+- [x] `app/shortcuts_dialog.py`を新規作成。`ShortcutsDialog`が`main_window.menuBar()`を再帰的に走査してショートカット付き`QAction`を自動収集（メニュー変更時に一覧が自動追従することを実際に確認済み）、それに上記2つの定数＋単発の`Esc`（`_MISC_SHORTCUTS_HELP`、増減がほぼ無い1件のみなので例外的に直書き）を合わせて`QGroupBox`ごとに表示。キー文字列は`+`/`/`で分割し角丸のキーキャップ風`QLabel`として表示
+- [x] `main_window.py`: 「ヘルプ」メニューを新設し「キーボードショートカット...」（Ctrl+/）を追加、`_show_shortcuts_dialog`から`ShortcutsDialog(self).exec()`を呼ぶ
+- [x] headless(offscreen QPA)で以下を確認: メニュー一覧の自動収集内容が正しいこと／`QAction.setShortcut`を変えると一覧に自動反映されること／目次パネル10件・ページラベルパネル1件のショートカット定数が正しく読めること／ダイアログのスクリーンショットでキーキャップ表示・3セクションとも崩れず表示されることを確認
+
 ## リリース前安全性検証: 暗号化PDFの拒否と保護維持設定 ✅
 
 **背景**: リリース前に「PDFを壊さない・元に戻せなくなるのを防ぐ」観点でコードを検証。実験の結果、(1) パスワード保護PDF(`needs_pass=1`)を開くと`viewer.load()`内部で未処理例外が発生し中途半端に壊れた状態になる、(2)「別名で保存」（常に`_full_rewrite()`経由）は暗号化・権限情報を一切保持しないため、オーナーパスワードのみ（印刷禁止など）のPDFの保護が別名保存すると黙って消える、という2点が判明。個人利用前提のため「別名保存時のデフォルトは保護を外す、必要なら設定でオプトイン」という方針を採用。

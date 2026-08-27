@@ -999,6 +999,22 @@ class TocPanel(QWidget):
     # ユーティリティ
     # ------------------------------------------------------------------
 
+    # ショートカット一覧ダイアログ（shortcuts_dialog.py）が参照する。
+    # 下の_make_tree内のkeyPressEvent/eventFilterで実装しているキー操作を変える場合は、
+    # あわせてこのリストも更新すること。
+    TREE_SHORTCUTS_HELP: list[tuple[str, str]] = [
+        ("Ctrl+Z", "元に戻す"),
+        ("↑ / ↓", "選択移動（該当ページへジャンプ）"),
+        ("Shift+↑ / Shift+↓", "複数選択"),
+        ("Alt+↑ / Alt+↓", "ページ表示に追従せず選択のみ移動"),
+        ("Ctrl+↑ / Ctrl+↓", "選択項目を上下に移動"),
+        ("Tab / Ctrl+→", "階層を下げる（インデント）"),
+        ("Shift+Tab / Ctrl+←", "階層を上げる（アウトデント）"),
+        ("Enter", "選択項目を編集"),
+        ("Shift+Enter", "選択項目の上に新規項目を挿入"),
+        ("Delete / Backspace", "選択項目を削除"),
+    ]
+
     def _make_tree(self) -> QTreeWidget:
         tree = QTreeWidget()
 

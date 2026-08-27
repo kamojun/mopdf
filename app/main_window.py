@@ -14,6 +14,7 @@ from .pdf_viewer import PdfViewer
 from .toc_panel import TocPanel, INSERT_BELOW_SELECTED, INSERT_PAGE_ORDER
 from .page_label_panel import PageLabelPanel
 from .changes_dialog import ChangesDialog, paired_diff
+from .shortcuts_dialog import ShortcutsDialog
 
 
 class MainWindow(QMainWindow):
@@ -183,6 +184,12 @@ class MainWindow(QMainWindow):
         self._action_show_changes.triggered.connect(self._show_changes_dialog)
         self._action_show_changes.setEnabled(False)
         edit_menu.addAction(self._action_show_changes)
+
+        help_menu = menubar.addMenu("ヘルプ")
+        shortcuts_action = QAction("キーボードショートカット...", self)
+        shortcuts_action.setShortcut("Ctrl+/")
+        shortcuts_action.triggered.connect(self._show_shortcuts_dialog)
+        help_menu.addAction(shortcuts_action)
 
     # ------------------------------------------------------------------
     # ファイルを開く
@@ -572,6 +579,9 @@ class MainWindow(QMainWindow):
             self._recompute_unsaved_state()
         toc_pairs, label_pairs = self._compute_diff_pairs()
         ChangesDialog(toc_pairs, label_pairs, self).exec()
+
+    def _show_shortcuts_dialog(self) -> None:
+        ShortcutsDialog(self).exec()
 
     def _confirm_discard(self, action_label: str = "閉じる") -> bool:
         """未保存の変更がある場合は確認ダイアログを出す。続行する場合True。

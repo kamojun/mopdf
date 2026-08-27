@@ -398,6 +398,12 @@ class PageLabelPanel(QWidget):
         self._table.blockSignals(False)
         self.page_labels_modified.emit()
 
+    # ショートカット一覧ダイアログ（shortcuts_dialog.py）が参照する。
+    # ここに定義したキー操作を変える場合は、あわせてこのリストも更新すること。
+    TABLE_SHORTCUTS_HELP: list[tuple[str, str]] = [
+        ("Delete / Backspace", "選択範囲を削除"),
+    ]
+
     def eventFilter(self, obj, event) -> bool:
         if obj is self._table and event.type() == QEvent.Type.KeyPress:
             if event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):

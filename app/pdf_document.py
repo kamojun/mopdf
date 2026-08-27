@@ -220,12 +220,10 @@ class PdfDocument:
                 return
             target = Path(path) if path else self._path
             if target == self._path:
-                try:
-                    self._doc.save(str(target), incremental=True, encryption=fitz.PDF_ENCRYPT_KEEP)
-                except Exception:
-                    # 修復済みPDFなどインクリメンタル書き込み不可の場合はフルリライト。
-                    # 同一ファイルへの上書きなので、別名保存の設定に関わらず保護は必ず維持する。
-                    self._full_rewrite(target, keep_protection=True)
+                # 同一ファイルへの上書きなので、別名保存の設定に関わらず保護は必ず維持する。
+                # incremental=True（元ファイルへの直接追記）はアトミック性がなく、
+                # 保存中の強制終了で元ファイルが壊れるリスクがあるため使わない。
+                self._full_rewrite(target, keep_protection=True)
             else:
                 self._full_rewrite(target, keep_protection=keep_protection)
 

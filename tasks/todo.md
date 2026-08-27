@@ -40,9 +40,9 @@
 
 ## Phase 4: 仕上げ
 
-- [ ] PyInstallerでスタンドアローン.appにパッケージング
-- [ ] アイコン設定
-- [ ] 最近使ったファイル履歴
+- [x] PyInstallerでスタンドアローン.appにパッケージング
+- [x] アイコン設定（仮アイコン、後で差し替え予定）
+- [x] 最近使ったファイル履歴
 
 ## 目次のプレーンテキスト（.txt）インポート ✅
 
@@ -137,3 +137,44 @@
 - [x] `_open_file_dialog`/`_open_recent`/`dropEvent`に`_confirm_discard("開く")`を渡し、「保存して開く」「保存せずに開く」に文言を統一
 - [x] 実機確認: スクリーンショットでボタン並び・詳細表示の位置/サイズを確認。プログラム的にボタンクリックを発火させ、詳細表示→ChangesDialog表示→確認ダイアログ継続、保存して閉じる→実際に保存されbaseline/`_unsaved`がリセット、action_label="開く"でのボタン文言切り替えをそれぞれ確認
 - [x] 実GUI（`PySide6.QtTest`で実キー入力、`QT_QPA_PLATFORM=offscreen`）で以下を確認: 無修飾矢印はジャンプなし / Alt+↑↓はカーソル移動+ジャンプ / Shift+↑↓は範囲選択のみで並び替えなし / Ctrl+↑↓は複数選択を親ごとに独立して一括移動（境界での停止、親をまたぐ場合の独立動作を含む）/ Ctrl+←→で階層変更 / Shift+Enterの挿入維持 / Ctrl+Zでundo
+
+## macOSスタンドアローン.appへのパッケージング ✅
+
+**背景**: Phase 4で計画していたPyInstallerパッケージングに着手。`python main.py`実行前提だったのを、Python環境なしでダブルクリック起動できる`mopdf.app`にした。配布は当面自分用＋将来的にGitHub公開を想定（コード署名・公証は今回スコープ外、未署名アプリとして「右クリック→開く」起動が前提）。
+
+- [x] `main.py`: `QApplication`を`Application`にサブクラス化し、`QEvent.Type.FileOpen`を捕捉して`window.open_pdf()`を呼ぶよう対応（macOSの「このアプリケーションで開く」/ Finderダブルクリックで、起動中のアプリにファイルを渡すケースに対応。既存の`sys.argv`起点の起動はそのまま維持）
+- [x] `scripts/make_icon.py`: Pillowで仮アイコン（角丸正方形+"mo"）を生成し`iconutil`で`.icns`化するスクリプトを追加。`assets/icon.png`/`assets/icon.icns`を生成済み。本アイコンができたら`icon.png`を差し替えて再実行すればよい
+- [x] `mopdf.spec`を新規作成。`collect_all("fitz")`でPyMuPDFのネイティブ拡張を確実にバンドルし、`BUNDLE`で`.app`化（`bundle_identifier="com.kamojun.mopdf"`、`CFBundleDocumentTypes`で`public.pdf`相当のUTIを`LSHandlerRank: Alternate`として関連付け）
+- [x] **ハマりどころ**: 初回ビルドで`.app`が723MBになった。原因は`pymupdf.table.to_pandas()`（未使用の任意機能、`import pandas`はtry/except付きの遅延importでtable.py内）をPyInstallerの静的解析が到達可能コードとして辿り、開発機のグローバルPython環境にたまたま入っていたpandas/scipy/torch/networkx/matplotlib/IPython/jedi等の科学計算スタック一式を丸ごとバンドルしていたため。`mopdf.spec`の`Analysis(excludes=[...])`でこれらを明示的に除外し、167MBまで削減（アプリ自体はこれらの機能を一切使わないため機能への影響なし）
+- [x] `.gitignore`: `*.spec`を無条件ignoreしていたのを`!mopdf.spec`で例外化（手動保守する設定ファイルのため追跡対象に）
+- [x] `requirements-dev.txt`を新規追加（`-r requirements.txt` + `PyInstaller>=6.0`）。ビルド専用依存を実行時依存と分離
+- [x] READMEに「macOS向けスタンドアローンアプリのビルド」節を追記（ビルド手順、Gatekeeper未署名のため初回は右クリック→開くが必要な旨）
+- [x] ビルド確認: `pyinstaller mopdf.spec`が成功し`dist/mopdf.app`が生成されることを確認
+- [x] 実機確認: 合成テストPDF（3ページ、目次3件）をCLI引数で渡して`open dist/mopdf.app --args test.pdf`起動→スクリーンショットで、コンソールウィンドウなし・メニューバーに「mopdf」表示・目次パネルに3件のChapter表示・PDF本文が正しくレンダリングされることを確認（PyMuPDFのネイティブバンドルが機能している実質的な検証）
+- [ ] 未検証（今回スコープ外・ユーザー判断でテスト省略）: Cmd+S保存、QFileOpenEvent経由のダブルクリック/Open With起動、最近使ったファイル（QSettings）の永続化。いずれもコード上は妥当だが実機の自動UI操作は本セッションの環境でAccessibility権限がなく実施できなかった
+
+## 目次のcut/paste移動機能
+
+- [ ] 目次エントリをcutして別の場所にpasteで移動できる機能を追加
+
+## 目次のRedo機能
+
+- [ ] `toc_panel.py`: Undo(`_push_history`/`_undo`)のみでRedoが未実装。Redoスタックを追加しCmd+Shift+Zなどで再実行できるようにする
+
+## ページラベルパネルのUndo/Redo
+
+- [ ] `page_label_panel.py`には編集の取り消し機構が一切ない。目次側と同様の仕組みを追加する
+
+## 目次内検索・フィルター
+
+- [ ] 目次パネルにタイトル文字列で検索し該当行にジャンプ/フィルター表示できるボックスを追加
+
+## PDF表示の拡大縮小・フィット
+
+- [ ] `pdf_viewer.py`にズームイン/アウト・幅/ページに合わせるフィット機能を追加
+
+## 本アイコンへの差し替え・コード署名
+
+- [ ] `assets/icon.png`が仮アイコン（角丸正方形+"mo"）のまま。本アイコンができたら差し替えて`scripts/make_icon.py`を再実行する
+- [ ] 配布用`.app`が未署名でGatekeeper警告が出る。Apple Developer証明書での署名・notarizationを行う
+

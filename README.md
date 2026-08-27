@@ -30,3 +30,16 @@ python main.py
 ```
 
 PDFファイルをドラッグ&ドロップするか、メニューから「開く」で読み込んでください。
+
+## macOS向けスタンドアローンアプリのビルド
+
+Python環境なしで起動できる `mopdf.app` をPyInstallerでビルドできます。
+
+```bash
+pip install -r requirements-dev.txt
+pyinstaller mopdf.spec
+open dist/mopdf.app
+```
+
+- `dist/mopdf.app` が生成されます。`assets/icon.png` を差し替えて `python scripts/make_icon.py` を再実行すればアイコンを更新できます（現状は仮アイコン）。
+- 未署名・未公証のアプリのため、初回起動時はFinderで`mopdf.app`を**右クリック→「開く」**を選んでください（ダブルクリックだけだとGatekeeperにブロックされます）。

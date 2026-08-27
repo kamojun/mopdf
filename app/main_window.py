@@ -21,6 +21,7 @@ class MainWindow(QMainWindow):
     _MAX_RECENT = 10
     _UNSAVED_CHECK_INTERVAL_MS = 5000  # 未保存アスタリスクをバックグラウンドで確認する間隔
     _LABEL_CHANGE_DEBOUNCE_MS = 700  # ページラベル連続編集をまとめるデバウンス間隔
+    _MAX_HISTORY = 50  # 目次・ページラベル共通のUndo履歴の最大件数
 
     def __init__(self) -> None:
         super().__init__()
@@ -35,6 +36,7 @@ class MainWindow(QMainWindow):
         self._select_mode_active: bool = False  # テキスト選択モードが有効かどうか
         self._pending_old_label_texts: Optional[dict[int, str]] = None
         self._pending_old_page_labels: Optional[list[PageLabelRange]] = None
+        self._edit_history: list[tuple[list[TocEntry], list[PageLabelRange]]] = []
 
         self._setup_ui()
         self._setup_menu()
@@ -99,6 +101,10 @@ class MainWindow(QMainWindow):
         self._toc_panel.page_jump_requested.connect(self._viewer.scroll_to_page)
         # 目次編集 → 未保存フラグ
         self._toc_panel.toc_modified.connect(self._mark_unsaved)
+        # 目次編集の直前スナップショット → 統合Undo履歴に積む(ラベルは現在の状態をそのまま添える)
+        self._toc_panel.history_checkpoint_requested.connect(
+            lambda snapshot: self._push_history(snapshot, self._doc.get_page_labels())
+        )
         # ページラベル編集 → 即時反映 + 未保存フラグ
         self._page_label_panel.page_labels_modified.connect(self._on_page_labels_modified)
         self._page_label_panel.page_jump_requested.connect(self._viewer.scroll_to_page)
@@ -109,6 +115,10 @@ class MainWindow(QMainWindow):
         # Escapeキーでテキスト選択モードをキャンセル
         self._escape_shortcut = QShortcut(QKeySequence(Qt.Key.Key_Escape), self)
         self._escape_shortcut.activated.connect(self._cancel_select_mode)
+
+        # Ctrl+Z: 目次・ページラベル共通のUndo(どちらにフォーカスがあっても効く)
+        self._undo_shortcut = QShortcut(QKeySequence(QKeySequence.StandardKey.Undo), self)
+        self._undo_shortcut.activated.connect(self._undo)
 
     def _setup_menu(self) -> None:
         menubar = self.menuBar()
@@ -263,6 +273,7 @@ class MainWindow(QMainWindow):
         self._toc_baseline = self._toc_panel.get_toc()
         self._page_label_baseline = self._page_label_panel.get_page_labels()
         self._unsaved = False
+        self._edit_history = []
         self._update_title()
         self._update_status(0)
 
@@ -447,6 +458,8 @@ class MainWindow(QMainWindow):
             if self._pending_old_label_texts is None:
                 self._pending_old_label_texts = self._snapshot_toc_label_texts()
                 self._pending_old_page_labels = self._doc.get_page_labels()
+                # バースト最初の1回だけ、編集前の状態を統合Undo履歴に積む
+                self._push_history(self._toc_panel.get_toc(), self._pending_old_page_labels)
             self._doc.set_page_labels(self._page_label_panel.get_page_labels())
             self._viewer.refresh_page_labels()
             self._toc_panel.refresh_page_labels()
@@ -463,7 +476,6 @@ class MainWindow(QMainWindow):
         """ページラベル編集が一段落した後、目次の表示が変わったエントリがあれば
         物理ページを移動して表示を保つかどうかを確認する。"""
         old_texts = self._pending_old_label_texts
-        old_page_labels = self._pending_old_page_labels
         self._pending_old_label_texts = None
         self._pending_old_page_labels = None
         if not old_texts or not self._doc.is_open:
@@ -493,11 +505,25 @@ class MainWindow(QMainWindow):
         if clicked is btn_keep:
             self._toc_panel.remap_entry_pages(page_map)
         elif clicked is btn_cancel:
-            self._revert_page_labels(old_page_labels)
+            self._undo()
 
-    def _revert_page_labels(self, old_page_labels: list[PageLabelRange]) -> None:
-        """ページラベル編集をキャンセルし、編集前の状態に戻す。"""
-        self._doc.set_page_labels(old_page_labels)
+    def _push_history(self, toc_snapshot: list[TocEntry], label_snapshot: list[PageLabelRange]) -> None:
+        self._edit_history.append((toc_snapshot, label_snapshot))
+        if len(self._edit_history) > self._MAX_HISTORY:
+            self._edit_history.pop(0)
+
+    def _undo(self) -> None:
+        if not self._edit_history or not self._doc.is_open:
+            return
+        # 進行中のページラベル編集バーストがあれば破棄する
+        # (undoが復元した状態と食い違う比較・ダイアログが後から出ないように)
+        self._pending_old_label_texts = None
+        self._pending_old_page_labels = None
+        self._label_change_timer.stop()
+
+        toc_snapshot, label_snapshot = self._edit_history.pop()
+        self._toc_panel._build_tree_from_entries(toc_snapshot)
+        self._doc.set_page_labels(label_snapshot)
         self._page_label_panel._rebuild()
         self._viewer.refresh_page_labels()
         self._toc_panel.refresh_page_labels()

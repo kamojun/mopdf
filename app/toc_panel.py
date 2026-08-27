@@ -4,7 +4,7 @@ import io
 import re
 from typing import Optional
 from PySide6.QtCore import Qt, Signal, QModelIndex, QTimer, QEvent, QItemSelectionModel
-from PySide6.QtGui import QKeySequence, QDragEnterEvent, QDropEvent
+from PySide6.QtGui import QDragEnterEvent, QDropEvent
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QTreeWidget, QTreeWidgetItem,
     QLabel, QPushButton, QAbstractItemView, QStyledItemDelegate,
@@ -94,8 +94,9 @@ class PageLineDelegate(QStyledItemDelegate):
 class TocPanel(QWidget):
     page_jump_requested = Signal(int)   # 0-indexed 物理ページ番号
     toc_modified = Signal()             # 編集が行われたとき
+    history_checkpoint_requested = Signal(list)  # Undo履歴に積むべきlist[TocEntry]スナップショット
 
-    _MAX_HISTORY = 50
+
     _NO_SUGGESTION = -1  # 増分スピンボックスの最小値: 提案を出さない(OFF)
     _JUMP_DELAY_MS = 200  # クリック時のページジャンプを遅らせる時間(ダブルクリック判定待ち)
 
@@ -108,7 +109,6 @@ class TocPanel(QWidget):
         self._page_edit_mode: bool = False  # ページ番号連続入力モード
         self._page_increment: int = self._NO_SUGGESTION  # 連続入力モードでEnterのみ押した際の加算ページ数
         self._pending_seq_seed: Optional[int] = None  # 次に開くエディタへの提案値(0-indexed)
-        self._history: list[list[TocEntry]] = []
         self._staged_snapshot: Optional[list[TocEntry]] = None  # _add_entry用
         self.setAcceptDrops(True)
 
@@ -305,7 +305,6 @@ class TocPanel(QWidget):
     # ------------------------------------------------------------------
 
     def _rebuild(self) -> None:
-        self._history.clear()
         self._staged_snapshot = None
         entries = self._doc.get_toc() if self._doc else []
         self._build_tree_from_entries(entries)
@@ -412,16 +411,7 @@ class TocPanel(QWidget):
     # ------------------------------------------------------------------
 
     def _push_history(self) -> None:
-        self._history.append(self.get_toc())
-        if len(self._history) > self._MAX_HISTORY:
-            self._history.pop(0)
-
-    def _undo(self) -> None:
-        if not self._history:
-            return
-        snapshot = self._history.pop()
-        self._build_tree_from_entries(snapshot)
-        self._emit_modified()
+        self.history_checkpoint_requested.emit(self.get_toc())
 
     # ------------------------------------------------------------------
     # 編集操作
@@ -1003,7 +993,6 @@ class TocPanel(QWidget):
     # 下の_make_tree内のkeyPressEvent/eventFilterで実装しているキー操作を変える場合は、
     # あわせてこのリストも更新すること。
     TREE_SHORTCUTS_HELP: list[tuple[str, str]] = [
-        ("Ctrl+Z", "元に戻す"),
         ("↑ / ↓", "選択移動（該当ページへジャンプ）"),
         ("Shift+↑ / Shift+↓", "複数選択"),
         ("Alt+↑ / Alt+↓", "ページ表示に追従せず選択のみ移動"),
@@ -1022,8 +1011,6 @@ class TocPanel(QWidget):
             from PySide6.QtWidgets import QApplication
             if QApplication.focusWidget() is not tree:
                 QTreeWidget.keyPressEvent(tree, event); return
-            if event.matches(QKeySequence.StandardKey.Undo):
-                self._undo(); return
             mods = event.modifiers()
             key = event.key()
             if mods & Qt.KeyboardModifier.ControlModifier:
@@ -1068,9 +1055,7 @@ class TocPanel(QWidget):
             else:
                 if self._staged_snapshot is not None:
                     # 新規追加が確定: 追加前のスナップショットを履歴に積む
-                    self._history.append(self._staged_snapshot)
-                    if len(self._history) > self._MAX_HISTORY:
-                        self._history.pop(0)
+                    self.history_checkpoint_requested.emit(self._staged_snapshot)
                     self._staged_snapshot = None
                 self._pending_item = None
             QTreeWidget.closeEditor(tree, editor, hint)

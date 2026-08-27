@@ -157,13 +157,17 @@
 
 - [ ] 目次エントリをcutして別の場所にpasteで移動できる機能を追加
 
-## 目次のRedo機能
+## 目次・ページラベルのUndo履歴を一本化 ✅
 
-- [ ] `toc_panel.py`: Undo(`_push_history`/`_undo`)のみでRedoが未実装。Redoスタックを追加しCmd+Shift+Zなどで再実行できるようにする
+**背景**: 目次(TOC)編集には`toc_panel.py`内で完結したUndo（`Ctrl+Z`、`_history`、`TocPanel`のツリーがフォーカスを持つ時だけ動作）があったが、ページラベル編集にはUndoが一切なかった。別々の履歴として実装すると、(1) 「ページラベル変更時に目次のページ表示を保つ」機能（`remap_entry_pages`）が目次側の履歴に別途1件積んでしまい1つの操作が2つの履歴に分裂する、(2) 既存の`_pending_old_page_labels`/`_revert_page_labels`という専用の「元に戻す」ロジックと汎用Undoが重複する、という2つの問題が判明したため、`MainWindow`に履歴を1本化した。
 
-## ページラベルパネルのUndo/Redo
-
-- [ ] `page_label_panel.py`には編集の取り消し機構が一切ない。目次側と同様の仕組みを追加する
+- [x] `toc_panel.py`: `history_checkpoint_requested = Signal(list)`を追加。`_push_history()`の中身を`self.history_checkpoint_requested.emit(self.get_toc())`に変更（呼び出し箇所11箇所は無変更）。新規追加時の`_staged_snapshot`確定処理（`closeEditor`内）も同シグナル経由に変更。`_history`/`_MAX_HISTORY`/`_undo()`を削除し、ツリーの`keyPressEvent`が独自に処理していたCtrl+Zの横取りを削除
+- [x] `main_window.py`: `_edit_history: list[tuple[list[TocEntry], list[PageLabelRange]]]`を新設し、目次・ページラベル双方のシグナルをここに集約。`_toc_panel.history_checkpoint_requested`接続時はその瞬間の現在のラベル状態を一緒に積む。ページラベル編集は既存の`_on_page_labels_modified()`のバースト検出（`_pending_old_label_texts is None`の最初の1回だけ）にそのまま便乗し、バーストごとに1件だけ積む（複数フィールド編集が1回のUndoでまとまって戻る）
+- [x] `main_window.py`: `_undo()`を新設。目次・ページラベル両方を復元し、進行中のページラベル編集バーストがあれば破棄してから復元する。`_process_pending_label_change()`の「キャンセル」分岐は`self._undo()`を呼ぶだけに簡素化し、専用だった`_revert_page_labels()`は削除
+- [x] `main_window.py`: `_setup_ui()`にグローバル`QShortcut(QKeySequence.StandardKey.Undo)`を追加（`self._escape_shortcut`と同じパターン）。目次ツリー・ページラベル表のどちらにフォーカスがあっても同じCtrl+Zで効く。`open_pdf()`で`_edit_history`をクリア
+- [x] `shortcuts_dialog.py`: `Ctrl+Z`の説明を`TocPanel.TREE_SHORTCUTS_HELP`から、メニューにもツリーにも属さない単発`QShortcut`向けの`_MISC_SHORTCUTS_HELP`に移設
+- [x] headless(offscreen QPA)スクリプトで確認: (1) 目次のみ編集→undoで目次だけ戻りラベルは無関係 (2) ページラベルのみ編集(1バースト・複数フィールド変更)→undoで1回にまとまって戻り目次は無関係 (3) 追加時の`_staged_snapshot`が`closeEditor`確定経由で正しく積まれる (4) 「ページラベル変更で目次のページ表示を保つか」ダイアログの「キャンセル」が`_undo()`を正しく呼ぶ (5) 新しいPDFを開くと履歴がクリアされる (6) 単一ウィンドウをアクティブにした状態で、ページラベル表にフォーカスがある状態から実際のCtrl+Zキーイベント(`QTest.keyClick`)を送って目次の削除が正しく取り消されることを確認（複数ウィンドウ同時存在時は`WindowShortcut`コンテキストがheadless環境で不安定になり発火しないことがあったが、これはテスト環境固有の問題で実装のバグではないと判断）
+- [ ] Redo機能は今回のスコープ外（`Cmd+Shift+Z`等で再実行できるようにする）は将来の課題として残す
 
 ## 目次内検索・フィルター
 

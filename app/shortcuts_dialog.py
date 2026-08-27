@@ -11,6 +11,7 @@ from .page_label_panel import PageLabelPanel
 # 増減がほぼ見込めない1件のみのため、他のセクションと違いここに直接書く。
 _MISC_SHORTCUTS_HELP: list[tuple[str, str]] = [
     ("Esc", "テキスト選択モードをキャンセル"),
+    ("Ctrl+Z", "元に戻す（目次・ページラベル共通）"),
 ]
 
 _KEYCAP_STYLE = (

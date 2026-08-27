@@ -1001,6 +1001,7 @@ class TocPanel(QWidget):
         ("Shift+Tab / Ctrl+←", "階層を上げる（アウトデント）"),
         ("Enter", "選択項目を編集"),
         ("Shift+Enter", "選択項目の上に新規項目を挿入"),
+        ("Ctrl+Enter", "選択項目の下に新規項目を挿入"),
         ("Delete / Backspace", "選択項目を削除"),
     ]
 
@@ -1022,6 +1023,8 @@ class TocPanel(QWidget):
                     self._indent_left(); return
                 if key == Qt.Key.Key_Right:
                     self._indent_right(); return
+                if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+                    self._add_entry(before=False); return
             if key in (Qt.Key.Key_Up, Qt.Key.Key_Down) and not (mods & Qt.KeyboardModifier.ShiftModifier):
                 QTreeWidget.keyPressEvent(tree, event)
                 if not (mods & Qt.KeyboardModifier.AltModifier):

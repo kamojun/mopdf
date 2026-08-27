@@ -178,3 +178,14 @@
 - [ ] `assets/icon.png`が仮アイコン（角丸正方形+"mo"）のまま。本アイコンができたら差し替えて`scripts/make_icon.py`を再実行する
 - [ ] 配布用`.app`が未署名でGatekeeper警告が出る。Apple Developer証明書での署名・notarizationを行う
 
+## リリース前安全性検証: 暗号化PDFの拒否と保護維持設定 ✅
+
+**背景**: リリース前に「PDFを壊さない・元に戻せなくなるのを防ぐ」観点でコードを検証。実験の結果、(1) パスワード保護PDF(`needs_pass=1`)を開くと`viewer.load()`内部で未処理例外が発生し中途半端に壊れた状態になる、(2)「別名で保存」（常に`_full_rewrite()`経由）は暗号化・権限情報を一切保持しないため、オーナーパスワードのみ（印刷禁止など）のPDFの保護が別名保存すると黙って消える、という2点が判明。個人利用前提のため「別名保存時のデフォルトは保護を外す、必要なら設定でオプトイン」という方針を採用。
+
+- [x] `pdf_document.py`: `open()`を「新しいファイルを検証してから成功時のみ既存ドキュメントを差し替える」順序に再構成。`needs_pass=1`のPDFは`ValueError`を送出して拒否（副次的に、従来あった「新規オープン失敗時に`self._doc`が閉じた無効なドキュメントを指したまま残る」バグも同時に解消）
+- [x] `main_window.open_pdf()`の既存`try/except`がこの`ValueError`をそのまま拾い`QMessageBox`でエラー表示することを確認（`main_window.py`側の変更は不要だった）
+- [x] `pdf_document.py`: `save()`/`_full_rewrite()`に`keep_protection`パラメータを追加。`True`の場合`encryption=fitz.PDF_ENCRYPT_KEEP`と`permissions=self._doc.permissions`を両方明示的に渡す（`encryption=KEEP`だけでは権限ビットが`4095`=フルアクセスにリセットされてしまうことを実験で確認したため）。同一パスへの上書き保存（Ctrl+S、`incremental`失敗時のフォールバック含む）は常に`keep_protection=True`固定
+- [x] `main_window.py`: `_open_settings_dialog()`を新設（チェックボックス1つ「別名で保存するとき、元のPDFの保護を維持する」、`QSettings`キー`saveAsKeepProtection`でデフォルト`False`）。メニューに`QAction.MenuRole.PreferencesRole`付きで追加（macOSのアプリメニューに自動配置される）
+- [x] `main_window.py`: `_save_as()`が設定値を読んで`keep_protection`を渡すよう変更
+- [x] headless(offscreen QPA)スクリプトで以下を確認: (1) パスワード保護PDFが`open()`で拒否され`is_open=False`のまま／`MainWindow.open_pdf()`で未処理例外が伝播せずエラーダイアログ経路に乗る (2) オーナーパスワードのみのPDFで通常の上書き保存は保護を維持（回帰） (3) 別名保存はデフォルト(`keep_protection=False`)で保護が外れる (4) 設定ONなら別名保存でも元のオーナーパスワード・権限ビットが維持される(`authenticate`で確認) (5) 設定ダイアログのチェック状態が`QSettings`に永続化され再読み込み後も反映される (6) 非暗号化PDFの開く/上書き保存/別名保存が従来通り動作する
+- [x] 検証時に発見した副次的な事実（実装はスコープ外のまま`project_pdf_save_safety.md`にメモ）: ページラベル編集にはUndoが未実装（TOC編集のみCtrl+Zあり）、保存前のバックアップ機構なし、同一パス上書きの通常保存自体は今回の検証で問題なしと確認

@@ -60,10 +60,15 @@ class PdfDocument:
 
     def open(self, path: str | Path) -> None:
         with FITZ_LOCK:
+            new_path = Path(path)
+            doc = fitz.open(str(new_path))
+            if doc.needs_pass:
+                doc.close()
+                raise ValueError("このPDFはパスワードで保護されています（未対応）")
             if self._doc is not None:
                 self._doc.close()
-            self._path = Path(path)
-            self._doc = fitz.open(str(self._path))
+            self._path = new_path
+            self._doc = doc
 
     def close(self) -> None:
         with FITZ_LOCK:
@@ -209,7 +214,7 @@ class PdfDocument:
     # 保存
     # ------------------------------------------------------------------
 
-    def save(self, path: str | Path | None = None) -> None:
+    def save(self, path: str | Path | None = None, keep_protection: bool = True) -> None:
         with FITZ_LOCK:
             if self._doc is None:
                 return
@@ -218,21 +223,29 @@ class PdfDocument:
                 try:
                     self._doc.save(str(target), incremental=True, encryption=fitz.PDF_ENCRYPT_KEEP)
                 except Exception:
-                    # 修復済みPDFなどインクリメンタル書き込み不可の場合はフルリライト
-                    self._full_rewrite(target)
+                    # 修復済みPDFなどインクリメンタル書き込み不可の場合はフルリライト。
+                    # 同一ファイルへの上書きなので、別名保存の設定に関わらず保護は必ず維持する。
+                    self._full_rewrite(target, keep_protection=True)
             else:
-                self._full_rewrite(target)
+                self._full_rewrite(target, keep_protection=keep_protection)
 
-    def _full_rewrite(self, target: Path) -> None:
+    def _full_rewrite(self, target: Path, keep_protection: bool = True) -> None:
         """一時ファイル経由でアトミックにフルリライトする。
         garbage=4 で xref を完全再構築し、破損を引き継がない。
+        keep_protection=True の場合、encryption=KEEP と permissions を明示的に
+        揃えて渡さないと、暗号化方式は残っても権限ビットだけフルアクセスに
+        リセットされてしまう(PyMuPDFの挙動として実験で確認済み)。
         呼び出し元(save)が既にFITZ_LOCKを保持している前提。
         """
         import tempfile, os
         fd, tmp_path = tempfile.mkstemp(suffix=".pdf", dir=target.parent)
         os.close(fd)
         try:
-            self._doc.save(tmp_path, garbage=4, clean=True)
+            if keep_protection:
+                self._doc.save(tmp_path, garbage=4, clean=True,
+                                encryption=fitz.PDF_ENCRYPT_KEEP, permissions=self._doc.permissions)
+            else:
+                self._doc.save(tmp_path, garbage=4, clean=True)
             os.replace(tmp_path, str(target))  # POSIX ではアトミック
         except Exception:
             try:

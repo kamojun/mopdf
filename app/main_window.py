@@ -6,7 +6,7 @@ from PySide6.QtGui import QAction, QDragEnterEvent, QDropEvent, QShortcut, QKeyS
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QSplitter, QFileDialog,
     QStatusBar, QLabel, QMessageBox, QMenu, QInputDialog,
-    QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QStyle
+    QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QStyle, QCheckBox
 )
 
 from .pdf_document import PdfDocument, TocEntry, PageLabelRange
@@ -165,6 +165,13 @@ class MainWindow(QMainWindow):
 
         file_menu.addSeparator()
 
+        settings_action = QAction("設定...", self)
+        settings_action.setMenuRole(QAction.MenuRole.PreferencesRole)
+        settings_action.triggered.connect(self._open_settings_dialog)
+        file_menu.addAction(settings_action)
+
+        file_menu.addSeparator()
+
         quit_action = QAction("終了", self)
         quit_action.setShortcut("Ctrl+Q")
         quit_action.triggered.connect(self.close)
@@ -286,13 +293,38 @@ class MainWindow(QMainWindow):
         self._doc.set_toc(toc)
         labels = self._page_label_panel.get_page_labels()
         self._doc.set_page_labels(labels)
+        keep_protection = self._settings.value("saveAsKeepProtection", False, type=bool)
         try:
-            self._doc.save(path)
+            self._doc.save(path, keep_protection=keep_protection)
         except Exception as e:
             QMessageBox.critical(self, "保存エラー", f"保存に失敗しました:\n{e}")
             return
         # 保存先を新しいファイルとして開き直す
         self.open_pdf(path)
+
+    def _open_settings_dialog(self) -> None:
+        dialog = QDialog(self)
+        dialog.setWindowTitle("設定")
+        layout = QVBoxLayout(dialog)
+
+        checkbox = QCheckBox("別名で保存するとき、元のPDFの保護(パスワード・権限制限)を維持する")
+        checkbox.setChecked(self._settings.value("saveAsKeepProtection", False, type=bool))
+        layout.addWidget(checkbox)
+
+        btn_row = QHBoxLayout()
+        btn_row.addStretch(1)
+        ok_btn = QPushButton("OK")
+        ok_btn.setDefault(True)
+        btn_row.addWidget(ok_btn)
+        layout.addLayout(btn_row)
+        dialog.setMinimumWidth(360)
+
+        def accept() -> None:
+            self._settings.setValue("saveAsKeepProtection", checkbox.isChecked())
+            dialog.accept()
+
+        ok_btn.clicked.connect(accept)
+        dialog.exec()
 
     # ------------------------------------------------------------------
     # CSVエクスポート

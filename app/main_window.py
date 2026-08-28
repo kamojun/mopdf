@@ -203,6 +203,12 @@ class MainWindow(QMainWindow):
         self._action_show_changes.setEnabled(False)
         edit_menu.addAction(self._action_show_changes)
 
+        self._action_search_toc = QAction("目次を検索...", self)
+        self._action_search_toc.setShortcut("Ctrl+F")
+        self._action_search_toc.triggered.connect(lambda: self._toc_panel.show_search())
+        self._action_search_toc.setEnabled(False)
+        edit_menu.addAction(self._action_search_toc)
+
         view_menu = menubar.addMenu("表示")
 
         self._action_zoom_in = QAction("拡大", self)
@@ -305,9 +311,9 @@ class MainWindow(QMainWindow):
         for action in (self._action_export_toc, self._action_export_labels,
                        self._action_export_both, self._action_import_toc,
                        self._action_paste_toc, self._action_import_labels,
-                       self._action_show_changes, self._action_zoom_in,
-                       self._action_zoom_out, self._action_zoom_reset,
-                       self._action_fit_window):
+                       self._action_show_changes, self._action_search_toc,
+                       self._action_zoom_in, self._action_zoom_out,
+                       self._action_zoom_reset, self._action_fit_window):
             action.setEnabled(True)
 
         self._toc_baseline = self._toc_panel.get_toc()

@@ -91,6 +91,30 @@ class PageLineDelegate(QStyledItemDelegate):
         editor.setGeometry(option.rect)
 
 
+class _SearchLineEdit(QLineEdit):
+    """目次検索バー用。Escでバーを閉じ、Enterで最初の一致へジャンプする。"""
+
+    escape_pressed = Signal()
+    enter_pressed = Signal()
+
+    def event(self, event):
+        # ShortcutOverrideを先取りしないと、グローバルEscape(テキスト選択モード解除)の
+        # QShortcutと二重発火してしまう。
+        if event.type() == QEvent.Type.ShortcutOverride and event.key() == Qt.Key.Key_Escape:
+            event.accept()
+            return True
+        return super().event(event)
+
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key.Key_Escape:
+            self.escape_pressed.emit()
+            return
+        if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            self.enter_pressed.emit()
+            return
+        super().keyPressEvent(event)
+
+
 class TocPanel(QWidget):
     page_jump_requested = Signal(int)   # 0-indexed 物理ページ番号
     toc_modified = Signal()             # 編集が行われたとき
@@ -110,6 +134,10 @@ class TocPanel(QWidget):
         self._page_increment: int = self._NO_SUGGESTION  # 連続入力モードでEnterのみ押した際の加算ページ数
         self._pending_seq_seed: Optional[int] = None  # 次に開くエディタへの提案値(0-indexed)
         self._staged_snapshot: Optional[list[TocEntry]] = None  # _add_entry用
+        self._search_expand_snapshot: Optional[dict[int, bool]] = None  # 検索起動時の展開状態(id(item)->bool)
+        self._search_open: bool = False  # 検索バーの開閉状態(isVisible()は祖先の表示状態に依存するため使わない)
+        self._prev_edit_triggers = None  # 検索中に退避するeditTriggers(hide_searchで復元)
+        self._prev_drag_drop_mode = None  # 検索中に退避するdragDropMode(hide_searchで復元)
         self.setAcceptDrops(True)
 
         layout = QVBoxLayout(self)
@@ -171,6 +199,28 @@ class TocPanel(QWidget):
         tb_layout.addStretch()
         layout.addWidget(toolbar)
 
+        # 検索バー（Ctrl+Fで表示、通常は非表示）
+        self._search_bar = QWidget()
+        self._search_bar.setStyleSheet("background: #f5f5f5; border-bottom: 1px solid #ddd;")
+        self._search_bar.setVisible(False)
+        search_layout = QHBoxLayout(self._search_bar)
+        search_layout.setContentsMargins(4, 2, 4, 2)
+        search_layout.setSpacing(4)
+
+        self._search_edit = _SearchLineEdit()
+        self._search_edit.setPlaceholderText("タイトルを検索")
+        search_layout.addWidget(self._search_edit, 1)
+
+        self._search_count_label = QLabel("")
+        self._search_count_label.setStyleSheet("color: #666; font-size: 11px;")
+        search_layout.addWidget(self._search_count_label)
+
+        btn_search_close = self._make_btn("✕", "検索を閉じる")
+        btn_search_close.clicked.connect(self.hide_search)
+        search_layout.addWidget(btn_search_close)
+
+        layout.addWidget(self._search_bar)
+
         # ツリー（Shift+矢印: 複数選択, Cmd/Ctrl+矢印・Tab/Shift+Tab: 並び替え・階層変更, Alt+↑/↓: ページ表示追従）
         self._tree = self._make_tree()
         self._tree.setHeaderHidden(True)
@@ -226,11 +276,16 @@ class TocPanel(QWidget):
         self._tree.itemSelectionChanged.connect(self._cancel_stale_pending_jump)
         self._update_button_states()
 
+        self._search_edit.textChanged.connect(self._on_search_text_changed)
+        self._search_edit.escape_pressed.connect(self.hide_search)
+        self._search_edit.enter_pressed.connect(self._jump_to_first_match)
+
     # ------------------------------------------------------------------
     # 公開API
     # ------------------------------------------------------------------
 
     def load(self, doc: PdfDocument) -> None:
+        self.hide_search()  # 別のPDFを開く際、古い検索状態を引きずらないようにする
         self._doc = doc
         self._rebuild()
 
@@ -299,6 +354,38 @@ class TocPanel(QWidget):
                               insert_mode: str = INSERT_BELOW_SELECTED) -> None:
         """テキスト選択などから外部にエントリを追加する"""
         self._add_entry(title=title, page_index=page_index, insert_mode=insert_mode)
+
+    def show_search(self) -> None:
+        """検索バーを表示しフォーカスする(Ctrl+Fから呼ばれる)。
+        検索中はツリーの構造編集(追加/削除/移動/階層変更/D&D/インライン編集/
+        貼り付け/インポート)を全てロックする。表示結果と実データがずれて
+        「フィルターされているはずの行が編集で紛れ込む」ような混乱を避けるため。"""
+        if not self._search_open:
+            self._search_open = True
+            self._search_expand_snapshot = self._snapshot_expand_state()
+            self._prev_edit_triggers = self._tree.editTriggers()
+            self._prev_drag_drop_mode = self._tree.dragDropMode()
+            self._tree.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+            self._tree.setDragDropMode(QAbstractItemView.DragDropMode.NoDragDrop)
+            self._search_bar.setVisible(True)
+            self._update_button_states()
+        self._search_edit.setFocus()
+        self._search_edit.selectAll()
+
+    def hide_search(self) -> None:
+        """検索バーを閉じ、フィルター・展開状態・編集ロックを元に戻す。"""
+        if not self._search_open:
+            return
+        self._search_open = False
+        self._search_bar.setVisible(False)
+        self._search_edit.clear()  # textChanged → _on_search_text_changed でフィルター解除
+        if self._search_expand_snapshot is not None:
+            self._restore_expand_state(self._search_expand_snapshot)
+            self._search_expand_snapshot = None
+        self._tree.setEditTriggers(self._prev_edit_triggers)
+        self._tree.setDragDropMode(self._prev_drag_drop_mode)
+        self._update_button_states()
+        self._tree.setFocus()
 
     # ------------------------------------------------------------------
     # 内部: ツリー構築
@@ -419,7 +506,7 @@ class TocPanel(QWidget):
 
     def _add_entry(self, *, title: str = "（無題）", page_index: Optional[int] = None,
                     before: bool = False, insert_mode: str = INSERT_BELOW_SELECTED) -> None:
-        if self._doc is None:
+        if self._doc is None or self._search_open:
             return
         if page_index is None:
             page_index = self._current_page
@@ -483,6 +570,8 @@ class TocPanel(QWidget):
             self._tree.takeTopLevelItem(self._tree.indexOfTopLevelItem(item))
 
     def _delete_entry(self) -> None:
+        if self._search_open:
+            return
         item = self._tree.currentItem()
         if item is None:
             return
@@ -504,6 +593,8 @@ class TocPanel(QWidget):
     def _move_selected(self, delta: int) -> None:
         """選択中のルート項目を親ごとにまとめ、塊として1段ずつ上下に動かす。
         delta=-1で上, +1で下。"""
+        if self._search_open:
+            return
         roots = self._selected_root_items()
         if not roots:
             return
@@ -574,6 +665,8 @@ class TocPanel(QWidget):
     def _indent_left(self) -> None:
         """選択中の項目を1段上の階層に移動する（親の兄弟になる）。
         複数選択時は各項目に適用する。"""
+        if self._search_open:
+            return
         roots = [it for it in self._selected_root_items() if it.parent() is not None]
         if not roots:
             return  # 全てトップレベル
@@ -601,6 +694,8 @@ class TocPanel(QWidget):
     def _indent_right(self) -> None:
         """選択中の項目を1段下の階層に移動する（直前の兄弟の子になる）。
         複数選択時は各項目に適用する。"""
+        if self._search_open:
+            return
         roots = self._selected_root_items()
         movable = []
         for item in roots:
@@ -679,6 +774,8 @@ class TocPanel(QWidget):
         self._import_toc_from_path(path)
 
     def _import_toc_from_path(self, path: str) -> None:
+        if self._search_open:
+            return
         is_txt = path.lower().endswith(".txt")
         try:
             if is_txt:
@@ -786,7 +883,7 @@ class TocPanel(QWidget):
         既存の目次は壊さず、選択項目の直後（同じ階層）に連続挿入する。
         選択が無ければ末尾に追加する。ページ番号・階層は未設定/level=1で
         取り込み、UIで調整する運用を想定。"""
-        if self._doc is None or self._pending_item is not None:
+        if self._doc is None or self._pending_item is not None or self._search_open:
             return
         text = QApplication.clipboard().text()
         titles = [line.strip() for line in text.splitlines() if line.strip()]
@@ -836,6 +933,8 @@ class TocPanel(QWidget):
         # self._tree は InternalMove 用に WA_AcceptDrops が立っており、外部からの
         # ファイルドロップがツリーに奪われて親に伝播しないため、ここで横取りする。
         if obj is self._tree:
+            if self._search_open:
+                return super().eventFilter(obj, event)
             etype = event.type()
             if etype in (QEvent.Type.DragEnter, QEvent.Type.DragMove):
                 urls = event.mimeData().urls()
@@ -930,6 +1029,8 @@ class TocPanel(QWidget):
 
     def _on_item_double_clicked(self, item: QTreeWidgetItem, column: int) -> None:
         self._cancel_pending_jump(item)
+        if self._search_open:
+            return
         if column == 0:
             self._push_history()
             self._tree.editItem(item, 0)
@@ -941,7 +1042,7 @@ class TocPanel(QWidget):
         self._page_edit_mode = checked
         self._pending_seq_seed = None
         self._spin_increment.setEnabled(checked)
-        if not checked:
+        if not checked or self._search_open:
             return
         item = self._tree.currentItem()
         if item is None and self._tree.topLevelItemCount() > 0:
@@ -1027,14 +1128,99 @@ class TocPanel(QWidget):
     def _update_button_states(self) -> None:
         has_doc = self._doc is not None
         has_sel = bool(self._tree.selectedItems())
-        self._btn_add.setEnabled(has_doc)
-        self._btn_del.setEnabled(has_sel)
-        self._btn_up.setEnabled(has_sel)
-        self._btn_down.setEnabled(has_sel)
-        self._btn_left.setEnabled(has_sel)
-        self._btn_right.setEnabled(has_sel)
-        self._btn_page_mode.setEnabled(has_doc)
-        self._spin_increment.setEnabled(has_doc and self._page_edit_mode)
+        editable = has_doc and not self._search_open
+        self._btn_add.setEnabled(editable)
+        self._btn_del.setEnabled(editable and has_sel)
+        self._btn_up.setEnabled(editable and has_sel)
+        self._btn_down.setEnabled(editable and has_sel)
+        self._btn_left.setEnabled(editable and has_sel)
+        self._btn_right.setEnabled(editable and has_sel)
+        self._btn_page_mode.setEnabled(editable)
+        self._spin_increment.setEnabled(editable and self._page_edit_mode)
+
+    # ------------------------------------------------------------------
+    # 目次検索
+    # ------------------------------------------------------------------
+
+    def _snapshot_expand_state(self) -> dict[int, bool]:
+        snapshot: dict[int, bool] = {}
+
+        def walk(item: QTreeWidgetItem) -> None:
+            snapshot[id(item)] = item.isExpanded()
+            for i in range(item.childCount()):
+                walk(item.child(i))
+
+        for i in range(self._tree.topLevelItemCount()):
+            walk(self._tree.topLevelItem(i))
+        return snapshot
+
+    def _restore_expand_state(self, snapshot: dict[int, bool]) -> None:
+        def walk(item: QTreeWidgetItem) -> None:
+            if id(item) in snapshot:
+                item.setExpanded(snapshot[id(item)])
+            for i in range(item.childCount()):
+                walk(item.child(i))
+
+        for i in range(self._tree.topLevelItemCount()):
+            walk(self._tree.topLevelItem(i))
+
+    def _filter_tree(self, needle: str) -> list[QTreeWidgetItem]:
+        """タイトルに needle(小文字)を含む項目のみ表示し、一致した子孫を持つ祖先を
+        自動展開する。戻り値は表示順(上から下)に並んだ一致項目のリスト。"""
+        matches: list[QTreeWidgetItem] = []
+
+        if not needle:
+            def show_all(item: QTreeWidgetItem) -> None:
+                item.setHidden(False)
+                for i in range(item.childCount()):
+                    show_all(item.child(i))
+            for i in range(self._tree.topLevelItemCount()):
+                show_all(self._tree.topLevelItem(i))
+            return matches
+
+        def visit(item: QTreeWidgetItem) -> bool:
+            self_match = needle in item.text(0).lower()
+            if self_match:
+                matches.append(item)
+            child_match = False
+            for i in range(item.childCount()):
+                if visit(item.child(i)):
+                    child_match = True
+            visible = self_match or child_match
+            item.setHidden(not visible)
+            if child_match:
+                item.setExpanded(True)
+            return visible
+
+        for i in range(self._tree.topLevelItemCount()):
+            visit(self._tree.topLevelItem(i))
+        return matches
+
+    def _on_search_text_changed(self, text: str) -> None:
+        needle = text.strip().lower()
+        matches = self._filter_tree(needle)
+        if not needle:
+            self._search_count_label.setText("")
+            return
+        if not matches:
+            self._search_count_label.setText("該当なし")
+            return
+        self._search_count_label.setText(f"{len(matches)}件")
+        first = matches[0]
+        self._tree.setCurrentItem(first)
+        self._tree.scrollToItem(first)
+
+    def _jump_to_first_match(self) -> None:
+        """検索ボックスでEnterが押されたときに呼ばれる。currentItemは入力中の
+        _on_search_text_changed で既に最初の一致にセットされている。以後は
+        フォーカスをツリーに移し、既存の↑/↓ジャンプ処理に委ねる。"""
+        item = self._tree.currentItem()
+        if item is None or item.isHidden():
+            return
+        page = item.data(0, Qt.ItemDataRole.UserRole)
+        if page is not None:
+            self.page_jump_requested.emit(page)
+        self._tree.setFocus()
 
     # ------------------------------------------------------------------
     # ユーティリティ
@@ -1054,6 +1240,8 @@ class TocPanel(QWidget):
         ("Shift+Enter", "選択項目の上に新規項目を挿入"),
         ("Ctrl+Enter", "選択項目の下に新規項目を挿入"),
         ("Delete / Backspace", "選択項目を削除"),
+        ("Esc（検索ボックス内）", "目次検索を閉じる"),
+        ("Enter（検索ボックス内）", "最初の一致へジャンプ（以後は↑/↓で次/前の一致へ）"),
     ]
 
     def _make_tree(self) -> QTreeWidget:
@@ -1087,7 +1275,7 @@ class TocPanel(QWidget):
                 return
             if mods & Qt.KeyboardModifier.ShiftModifier and key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
                 self._add_entry(before=True); return
-            if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter) and not self._search_open:
                 item = tree.currentItem()
                 if item is not None:
                     self._push_history()

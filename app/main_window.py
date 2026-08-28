@@ -168,6 +168,11 @@ class MainWindow(QMainWindow):
         self._action_import_toc.triggered.connect(self._import_toc_csv)
         self._action_import_toc.setEnabled(False)
         import_menu.addAction(self._action_import_toc)
+        self._action_paste_toc = QAction("目次をクリップボードから貼り付け", self)
+        self._action_paste_toc.setShortcut("Ctrl+V")
+        self._action_paste_toc.triggered.connect(lambda: self._toc_panel.paste_from_clipboard())
+        self._action_paste_toc.setEnabled(False)
+        import_menu.addAction(self._action_paste_toc)
         self._action_import_labels = QAction("ページラベルをインポート...", self)
         self._action_import_labels.triggered.connect(self._import_labels_csv)
         self._action_import_labels.setEnabled(False)
@@ -267,7 +272,8 @@ class MainWindow(QMainWindow):
         self._page_label_panel.load(self._doc)
         for action in (self._action_export_toc, self._action_export_labels,
                        self._action_export_both, self._action_import_toc,
-                       self._action_import_labels, self._action_show_changes):
+                       self._action_paste_toc, self._action_import_labels,
+                       self._action_show_changes):
             action.setEnabled(True)
 
         self._toc_baseline = self._toc_panel.get_toc()

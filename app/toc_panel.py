@@ -716,7 +716,7 @@ class TocPanel(QWidget):
             )
 
     def _parse_csv_with_warnings(self, path: str) -> tuple[list[TocEntry], list[str]]:
-        """CSV形式: level,title,page を読み込む。
+        """CSV形式: level,title,page または title,page（levelなしは1固定）を読み込む。
         page は論理ページラベル / (n)形式 / 整数（1-indexed物理）/ '?'（未設定）を受け付ける。
         解決できないページは未設定としてロードし警告を返す。
         """
@@ -728,18 +728,27 @@ class TocPanel(QWidget):
             for row_num, row in enumerate(reader, 1):
                 if not row or row[0].strip().startswith("#"):
                     continue
-                if row[0].strip().lower() == "level":
-                    continue  # ヘッダー行をスキップ
-                if len(row) < 3:
+                first = row[0].strip().lower()
+                if len(row) >= 3 and first == "level":
+                    continue  # 3列ヘッダー行をスキップ
+                if len(row) == 2 and first == "title":
+                    continue  # 2列ヘッダー行をスキップ
+
+                if len(row) >= 3:
+                    try:
+                        level = int(row[0].strip())
+                    except ValueError:
+                        continue
+                    if level < 1:
+                        continue
+                    title = row[1].strip()
+                    page_str = row[2].strip()
+                elif len(row) == 2:
+                    level = 1
+                    title = row[0].strip()
+                    page_str = row[1].strip()
+                else:
                     continue  # カラム不足は黙ってスキップ
-                try:
-                    level = int(row[0].strip())
-                except ValueError:
-                    continue
-                if level < 1:
-                    continue
-                title = row[1].strip()
-                page_str = row[2].strip()
 
                 # ページ解決
                 if page_str == "?":
@@ -771,6 +780,39 @@ class TocPanel(QWidget):
                     continue
                 entries.append(TocEntry(level=1, title=title, page=None))
         return entries
+
+    def paste_from_clipboard(self) -> None:
+        """クリップボードのテキストを1行1タイトルとして貼り付ける。
+        既存の目次は壊さず、選択項目の直後（同じ階層）に連続挿入する。
+        選択が無ければ末尾に追加する。ページ番号・階層は未設定/level=1で
+        取り込み、UIで調整する運用を想定。"""
+        if self._doc is None or self._pending_item is not None:
+            return
+        text = QApplication.clipboard().text()
+        titles = [line.strip() for line in text.splitlines() if line.strip()]
+        if not titles:
+            QMessageBox.information(self, "貼り付け", "有効な項目が見つかりませんでした。")
+            return
+
+        self._push_history()
+        selected = self._tree.currentItem()
+        last_inserted: Optional[QTreeWidgetItem] = None
+        for title in titles:
+            item = self._make_item(title, None)
+            if selected is not None:
+                parent = selected.parent()
+                if parent:
+                    parent.insertChild(parent.indexOfChild(selected) + 1, item)
+                else:
+                    self._tree.insertTopLevelItem(self._tree.indexOfTopLevelItem(selected) + 1, item)
+                selected = item  # 次の項目はこの直後に連続挿入 → 貼り付け順を維持
+            else:
+                self._tree.addTopLevelItem(item)
+            last_inserted = item
+
+        if last_inserted is not None:
+            self._tree.setCurrentItem(last_inserted)
+        self._emit_modified()
 
     # ------------------------------------------------------------------
     # ドラッグ&ドロップ（目次インポート）

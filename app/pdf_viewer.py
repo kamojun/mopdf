@@ -1,7 +1,7 @@
 from __future__ import annotations
 import threading
 from typing import Optional
-from PySide6.QtCore import Qt, Signal, QTimer, QRect, QPoint, QThreadPool, Slot
+from PySide6.QtCore import Qt, Signal, QTimer, QRect, QPoint, QThreadPool, Slot, QEvent
 from PySide6.QtGui import QPixmap, QImage, QPainter, QColor, QPen, QCursor, QFont
 from PySide6.QtWidgets import (
     QScrollArea, QWidget, QVBoxLayout, QLabel, QSizePolicy, QFrame, QRubberBand, QMenu
@@ -11,6 +11,9 @@ from .pdf_document import PdfDocument
 from .render_worker import RenderWorker
 
 RENDER_BUFFER = 2  # 表示ページの前後何ページを先読みするか
+# PageWidgetのQSS margin:8pxがレイアウトに追加する外側余白の合計(全方向8pxなので幅・高さ共通)。
+# borderはsetFixedSizeの内側に収まるため含めない。
+PAGE_LAYOUT_MARGIN = 16
 
 
 class PageWidget(QLabel):
@@ -124,16 +127,23 @@ class PageWidget(QLabel):
 
 
 class PdfViewer(QScrollArea):
+    ZOOM_MIN = 0.25
+    ZOOM_MAX = 4.0
+    ZOOM_STEP = 0.1
+    DEFAULT_ZOOM = 1.5  # フィット計算が不可能な場合のフォールバックとしてのみ使用
+
     page_changed = Signal(int)          # 0-indexed 現在ページ
     text_selected = Signal(str, int)    # (抽出テキスト, 0-indexed page)
     select_mode_requested = Signal()  # 右クリックメニューの「テキスト選択し目次追加」
     page_jump_dialog_requested = Signal()  # 右クリックメニューの「ページへ移動」
     page_label_requested = Signal(int)  # 右クリックメニューの「この位置にページラベル追加」(0-indexed page)
+    zoom_changed = Signal(float)
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self._doc: Optional[PdfDocument] = None
-        self._zoom: float = 1.5
+        self._zoom: float = self.DEFAULT_ZOOM
+        self._auto_fit: bool = True  # ウィンドウの高さにページを合わせる自動フィットが有効か
         self._page_widgets: list[PageWidget] = []
         self._page_sizes: list[tuple[int, int]] = []
         self._rendered: set[int] = set()
@@ -159,11 +169,25 @@ class PdfViewer(QScrollArea):
         self._render_timer.setInterval(80)
         self._render_timer.timeout.connect(self._render_visible)
 
+        self._pinch_zoom_pending: float = 0.0
+        self._pinch_zoom_timer = QTimer(self)
+        self._pinch_zoom_timer.setSingleShot(True)
+        self._pinch_zoom_timer.setInterval(120)
+        self._pinch_zoom_timer.timeout.connect(self._apply_pending_pinch_zoom)
+
+        self._resize_fit_timer = QTimer(self)
+        self._resize_fit_timer.setSingleShot(True)
+        self._resize_fit_timer.setInterval(150)
+        self._resize_fit_timer.timeout.connect(self.fit_to_window)
+
         self.verticalScrollBar().valueChanged.connect(self._on_scroll)
 
     def load(self, doc: PdfDocument) -> None:
         self._doc = doc
+        self._auto_fit = True
+        self._zoom = self._compute_fit_height_zoom(0) or self.DEFAULT_ZOOM
         self._rebuild()
+        self.zoom_changed.emit(self._zoom)
 
     def clear(self) -> None:
         for event in self._pending_cancels.values():
@@ -189,8 +213,98 @@ class PdfViewer(QScrollArea):
                 pw.refresh_label()
 
     # ------------------------------------------------------------------
+    # ズーム
+    # ------------------------------------------------------------------
 
-    def _rebuild(self) -> None:
+    def zoom_in(self) -> None:
+        self._auto_fit = False
+        self._apply_zoom(self._zoom + self.ZOOM_STEP)
+
+    def zoom_out(self) -> None:
+        self._auto_fit = False
+        self._apply_zoom(self._zoom - self.ZOOM_STEP)
+
+    def reset_zoom(self) -> None:
+        self._auto_fit = False
+        self._apply_zoom(1.0)  # 100% = fitz.Matrix(1,1)の実寸
+
+    def fit_to_window(self) -> None:
+        if self._doc is None:
+            return
+        anchor = self._capture_scroll_anchor()
+        page_index = anchor[0] if anchor else 0
+        new_zoom = self._compute_fit_height_zoom(page_index)
+        if new_zoom is None:
+            return
+        self._auto_fit = True
+        self._apply_zoom(new_zoom)
+
+    def _apply_zoom(self, new_zoom: float) -> None:
+        if self._doc is None:
+            return
+        new_zoom = max(self.ZOOM_MIN, min(self.ZOOM_MAX, new_zoom))
+        if abs(new_zoom - self._zoom) < 1e-6:
+            return
+        anchor = self._capture_scroll_anchor()
+        self._zoom = new_zoom
+        self._rebuild(preserve_anchor=anchor)
+        self.zoom_changed.emit(self._zoom)
+
+    def _compute_fit_height_zoom(self, page_index: int) -> Optional[float]:
+        if self._doc is None or self._doc.page_count == 0:
+            return None
+        page_index = max(0, min(page_index, self._doc.page_count - 1))
+        page_height_pts = self._doc.get_page_size(page_index, zoom=1.0)[1]
+        available = self.viewport().height() - PAGE_LAYOUT_MARGIN
+        if page_height_pts <= 0 or available <= 0:
+            return None
+        return max(self.ZOOM_MIN, min(self.ZOOM_MAX, available / page_height_pts))
+
+    def _capture_scroll_anchor(self) -> Optional[tuple[int, float]]:
+        if not self._page_sizes:
+            return None
+        scroll_top = self.verticalScrollBar().value()
+        y = 0
+        for i, (w, h) in enumerate(self._page_sizes):
+            if y + h > scroll_top:
+                fraction = (scroll_top - y) / h if h else 0.0
+                return (i, fraction)
+            y += h
+        return (len(self._page_sizes) - 1, 0.0)
+
+    def _apply_scroll_anchor(self, anchor: tuple[int, float]) -> None:
+        if not self._page_sizes:
+            return
+        page_index, fraction = anchor
+        page_index = min(page_index, len(self._page_sizes) - 1)
+        y = sum(h for _, h in self._page_sizes[:page_index])
+        y += fraction * self._page_sizes[page_index][1]
+        self.verticalScrollBar().setValue(int(y))
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        if self._auto_fit and self._doc is not None:
+            self._resize_fit_timer.start()
+
+    def event(self, event) -> bool:
+        if (event.type() == QEvent.Type.NativeGesture
+                and event.gestureType() == Qt.NativeGestureType.ZoomNativeGesture
+                and self._doc is not None):
+            self._pinch_zoom_pending += event.value()
+            self._pinch_zoom_timer.start()
+            return True
+        return super().event(event)
+
+    def _apply_pending_pinch_zoom(self) -> None:
+        delta = self._pinch_zoom_pending
+        self._pinch_zoom_pending = 0.0
+        if delta:
+            self._auto_fit = False
+            self._apply_zoom(self._zoom * (1.0 + delta))
+
+    # ------------------------------------------------------------------
+
+    def _rebuild(self, preserve_anchor: Optional[tuple[int, float]] = None) -> None:
         # 進行中のレンダリングをすべてキャンセル
         for event in self._pending_cancels.values():
             event.set()
@@ -198,7 +312,8 @@ class PdfViewer(QScrollArea):
         self._render_generation += 1
 
         self._clear_pages()
-        self.verticalScrollBar().setValue(0)
+        if preserve_anchor is None:
+            self.verticalScrollBar().setValue(0)
         if self._doc is None:
             return
 
@@ -217,7 +332,12 @@ class PdfViewer(QScrollArea):
             self._layout.addWidget(pw, 0, Qt.AlignmentFlag.AlignHCenter)
             self._page_widgets.append(pw)
 
-        QTimer.singleShot(0, self._render_visible)
+        def _finish() -> None:
+            if preserve_anchor is not None:
+                self._apply_scroll_anchor(preserve_anchor)
+            self._render_visible()
+
+        QTimer.singleShot(0, _finish)
 
     def _ensure_page_widget(self, i: int) -> PageWidget:
         return self._page_widgets[i]  # type: ignore[return-value]

@@ -80,6 +80,7 @@ class MainWindow(QMainWindow):
         self._viewer.select_mode_requested.connect(self._on_select_mode_requested)
         self._viewer.page_jump_dialog_requested.connect(self._on_page_jump_dialog_requested)
         self._viewer.page_label_requested.connect(self._page_label_panel.add_range_at_page)
+        self._viewer.zoom_changed.connect(self._on_zoom_changed)
 
         # 左右分割
         main_splitter = QSplitter(Qt.Orientation.Horizontal)
@@ -95,6 +96,8 @@ class MainWindow(QMainWindow):
         self._status_label = QLabel("PDFを開いてください")
         statusbar = QStatusBar()
         statusbar.addWidget(self._status_label)
+        self._zoom_label = QLabel("")
+        statusbar.addPermanentWidget(self._zoom_label)
         self.setStatusBar(statusbar)
 
         # 目次クリック → ページジャンプ
@@ -200,6 +203,35 @@ class MainWindow(QMainWindow):
         self._action_show_changes.setEnabled(False)
         edit_menu.addAction(self._action_show_changes)
 
+        view_menu = menubar.addMenu("表示")
+
+        self._action_zoom_in = QAction("拡大", self)
+        self._action_zoom_in.setShortcut(QKeySequence.StandardKey.ZoomIn)
+        self._action_zoom_in.setAutoRepeat(False)  # 長押しで毎ティック全ページ再生成されるのを防ぐ
+        self._action_zoom_in.triggered.connect(self._viewer.zoom_in)
+        self._action_zoom_in.setEnabled(False)
+        view_menu.addAction(self._action_zoom_in)
+
+        self._action_zoom_out = QAction("縮小", self)
+        self._action_zoom_out.setShortcut(QKeySequence.StandardKey.ZoomOut)
+        self._action_zoom_out.setAutoRepeat(False)
+        self._action_zoom_out.triggered.connect(self._viewer.zoom_out)
+        self._action_zoom_out.setEnabled(False)
+        view_menu.addAction(self._action_zoom_out)
+
+        self._action_zoom_reset = QAction("実際のサイズ (100%)", self)
+        self._action_zoom_reset.setShortcut("Ctrl+0")
+        self._action_zoom_reset.triggered.connect(self._viewer.reset_zoom)
+        self._action_zoom_reset.setEnabled(False)
+        view_menu.addAction(self._action_zoom_reset)
+
+        view_menu.addSeparator()
+
+        self._action_fit_window = QAction("ウィンドウに合わせる", self)
+        self._action_fit_window.triggered.connect(self._viewer.fit_to_window)
+        self._action_fit_window.setEnabled(False)
+        view_menu.addAction(self._action_fit_window)
+
         help_menu = menubar.addMenu("ヘルプ")
         shortcuts_action = QAction("キーボードショートカット...", self)
         shortcuts_action.setShortcut("Ctrl+/")
@@ -273,7 +305,9 @@ class MainWindow(QMainWindow):
         for action in (self._action_export_toc, self._action_export_labels,
                        self._action_export_both, self._action_import_toc,
                        self._action_paste_toc, self._action_import_labels,
-                       self._action_show_changes):
+                       self._action_show_changes, self._action_zoom_in,
+                       self._action_zoom_out, self._action_zoom_reset,
+                       self._action_fit_window):
             action.setEnabled(True)
 
         self._toc_baseline = self._toc_panel.get_toc()
@@ -717,6 +751,9 @@ class MainWindow(QMainWindow):
         else:
             text = f"ページ {page_index + 1}/{total}"
         self._status_label.setText(text)
+
+    def _on_zoom_changed(self, zoom: float) -> None:
+        self._zoom_label.setText(f"{round(zoom * 100)}%")
 
     # ------------------------------------------------------------------
 

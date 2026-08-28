@@ -18,11 +18,11 @@ INSERT_PAGE_ORDER = "page_order"          # 既存項目のページ番号順で
 
 
 class TitleDelegate(QStyledItemDelegate):
-    """タイトル列のデリゲート。Tab で同行のページ番号列編集に移る。"""
+    """タイトル列のデリゲート。Tab/Enterで同行のページ番号列編集に移る。"""
 
-    def __init__(self, on_tab, parent=None):
+    def __init__(self, on_advance, parent=None):
         super().__init__(parent)
-        self._on_tab = on_tab
+        self._on_advance = on_advance
         self._current_index = QModelIndex()
 
     def createEditor(self, parent, option, index):
@@ -31,10 +31,10 @@ class TitleDelegate(QStyledItemDelegate):
 
     def eventFilter(self, editor, event):
         if (event.type() == QEvent.Type.KeyPress
-                and event.key() == Qt.Key.Key_Tab):
+                and event.key() in (Qt.Key.Key_Tab, Qt.Key.Key_Return, Qt.Key.Key_Enter)):
             self.commitData.emit(editor)
             self.closeEditor.emit(editor, QStyledItemDelegate.EndEditHint.NoHint)
-            self._on_tab(self._current_index)
+            self._on_advance(self._current_index)
             return True
         return super().eventFilter(editor, event)
 
@@ -188,7 +188,7 @@ class TocPanel(QWidget):
         # 列0: タイトル編集可(Tab→列1へ), 列1: デリゲートでSpinBox
         self._tree.setItemDelegateForColumn(
             0, TitleDelegate(
-                on_tab=lambda idx: QTimer.singleShot(
+                on_advance=lambda idx: QTimer.singleShot(
                     0, lambda: self._tree.editItem(self._tree.itemFromIndex(idx), 1)
                 ),
                 parent=self,
@@ -957,22 +957,31 @@ class TocPanel(QWidget):
         self._page_increment = value
 
     def _on_page_enter(self, index: QModelIndex) -> None:
-        """ページ番号連続入力モード中、ページ列でEnterが押されたら次の行のページ列に移る。
-        次のエディタには前の行のページ+加算値を提案として表示する。"""
-        if not self._page_edit_mode:
-            return
+        """ページ番号列でEnterが押されたときの遷移先を決める。
+        連続入力モード中は次の行のページ列に移る（次のエディタには前の行の
+        ページ+加算値を提案として表示する）。通常時は次の項目のタイトル列に
+        移る。次の項目がなければ新規項目を作成し、そのタイトル編集に移る
+        （目次をまっさらな状態から作るフロー向け）。"""
         item = self._tree.itemFromIndex(index)
         if item is None:
             return
         next_item = self._tree.itemBelow(item)
-        if next_item is None:
-            self._btn_page_mode.setChecked(False)
+        if self._page_edit_mode:
+            if next_item is None:
+                self._btn_page_mode.setChecked(False)
+                return
+            last_page0 = item.data(0, Qt.ItemDataRole.UserRole)
+            self._pending_seq_seed = self._compute_seed_page(last_page0)
+            self._tree.setCurrentItem(next_item)
+            self._push_history()
+            QTimer.singleShot(0, lambda: self._tree.editItem(next_item, 1))
             return
-        last_page0 = item.data(0, Qt.ItemDataRole.UserRole)
-        self._pending_seq_seed = self._compute_seed_page(last_page0)
+        if next_item is None:
+            self._add_entry(before=False)
+            return
         self._tree.setCurrentItem(next_item)
         self._push_history()
-        QTimer.singleShot(0, lambda: self._tree.editItem(next_item, 1))
+        QTimer.singleShot(0, lambda: self._tree.editItem(next_item, 0))
 
     def _compute_seed_page(self, last_page0: Optional[int]) -> Optional[int]:
         if last_page0 is None or self._page_increment == self._NO_SUGGESTION:

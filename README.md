@@ -104,3 +104,9 @@ open dist/mopdf.app
 
 - `dist/mopdf.app` が生成されます。アイコンを更新する場合は `assets/icon.png` を差し替えて `python scripts/make_icon.py` を再実行してください（Pillowが必要です）。
 - 未署名・未公証のアプリのため、初回起動時はFinderで`mopdf.app`を**右クリック→「開く」**を選んでください（ダブルクリックだけだとGatekeeperにブロックされます）。
+
+## ライセンス
+
+このプロジェクトは [GNU Affero General Public License v3.0](LICENSE) の下で公開されています。
+
+依存ライブラリの [PyMuPDF](https://pymupdf.readthedocs.io/) はAGPL-3.0（またはArtifexの商用ライセンス）で配布されているため、本プロジェクトもAGPL-3.0を採用しています。

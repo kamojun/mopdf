@@ -34,6 +34,7 @@ class PageWidget(QLabel):
 
         self._origin = QPoint()
         self._rubber_band = QRubberBand(QRubberBand.Shape.Rectangle, self)
+        self._label_rect = QRect()
 
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.setFrameShape(QFrame.Shape.Box)
@@ -41,6 +42,7 @@ class PageWidget(QLabel):
         self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         self.setFixedSize(width, height)
         self.setStyleSheet("background: #e0e0e0; border: 1px solid #ccc; margin: 8px;")
+        self.setMouseTracking(True)
 
     def set_select_mode(self, enabled: bool) -> None:
         self._select_mode = enabled
@@ -73,13 +75,17 @@ class PageWidget(QLabel):
         bg_h = text_rect.height() + padding * 2
         bg_x = (self.width() - bg_w) // 2
         bg_y = self.height() - bg_h - 14
+        self._label_rect = QRect(bg_x, bg_y, bg_w, bg_h)
         painter.fillRect(bg_x, bg_y, bg_w, bg_h, QColor(0, 0, 0, 150))
         painter.setPen(QColor(255, 255, 255))
         painter.drawText(bg_x, bg_y, bg_w, bg_h, Qt.AlignmentFlag.AlignCenter, display)
         painter.end()
 
     def mousePressEvent(self, event) -> None:
-        if self._select_mode and event.button() == Qt.MouseButton.LeftButton:
+        if not self._select_mode and event.button() == Qt.MouseButton.LeftButton \
+                and self._label_rect.contains(event.pos()):
+            self.page_jump_dialog_requested.emit()
+        elif self._select_mode and event.button() == Qt.MouseButton.LeftButton:
             self._origin = event.pos()
             self._rubber_band.setGeometry(QRect(self._origin, self._origin))
             self._rubber_band.show()
@@ -91,6 +97,12 @@ class PageWidget(QLabel):
             self._rubber_band.setGeometry(
                 QRect(self._origin, event.pos()).normalized()
             )
+        elif not self._select_mode:
+            self.setCursor(QCursor(
+                Qt.CursorShape.PointingHandCursor if self._label_rect.contains(event.pos())
+                else Qt.CursorShape.ArrowCursor
+            ))
+            super().mouseMoveEvent(event)
         else:
             super().mouseMoveEvent(event)
 

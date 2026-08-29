@@ -570,17 +570,27 @@ class TocPanel(QWidget):
             self._tree.takeTopLevelItem(self._tree.indexOfTopLevelItem(item))
 
     def _delete_entry(self) -> None:
+        """選択中の項目をまとめて削除する。祖先ごと消える子孫は個別に処理しない。"""
         if self._search_open:
             return
-        item = self._tree.currentItem()
-        if item is None:
+        roots = self._selected_root_items()
+        if not roots:
             return
         self._push_history()
-        parent = item.parent()
-        if parent:
-            parent.removeChild(item)
-        else:
-            self._tree.takeTopLevelItem(self._tree.indexOfTopLevelItem(item))
+        # 削除後にフォーカスを戻す位置（先頭の削除対象があった場所）を控えておく
+        anchor_parent = roots[0].parent()
+        count_fn, index_of, _take, _insert = self._container_ops(anchor_parent)
+        anchor_index = index_of(roots[0])
+        # インデックスのズレを避けるため、表示順の下側から削除する
+        for item in reversed(roots):
+            self._delete_item(item)
+        remaining = count_fn()
+        if remaining:
+            child_at = (anchor_parent.child if anchor_parent is not None
+                        else self._tree.topLevelItem)
+            self._tree.setCurrentItem(child_at(min(anchor_index, remaining - 1)))
+        elif anchor_parent is not None:
+            self._tree.setCurrentItem(anchor_parent)
 
     def _container_ops(self, parent: Optional[QTreeWidgetItem]):
         """親アイテム（またはトップレベルなら`None`）に応じて、子リスト操作用の
@@ -1282,7 +1292,7 @@ class TocPanel(QWidget):
                     tree.editItem(item, 1 if self._page_edit_mode else 0)
                     return
             if key in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
-                if tree.currentItem() is not None:
+                if tree.selectedItems():
                     self._delete_entry()
                     return
             QTreeWidget.keyPressEvent(tree, event)

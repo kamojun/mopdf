@@ -234,3 +234,13 @@
 - [x] `_on_page_enter`: 既存の連続入力モード（`_page_edit_mode`）分岐はそのまま残し、通常時（モードOFF）の新しい分岐を追加。`itemBelow()`で次の項目を判定し、あれば次の項目のタイトル列編集へ、なければ`_add_entry(before=False)`で新規項目を作成してそのタイトル編集へ
 - [x] headless(offscreen QPA, `PySide6.QtTest`で実キー入力)で以下を確認: (1) タイトルEnterでページ列編集に切り替わる (2) 末尾項目でページEnter→新規項目作成・タイトル編集に移る、を繰り返せる (3) 途中の項目でページEnterを再度押すと新規作成せず次の項目のタイトル編集に移る (4) Escapeでの新規項目キャンセル（既存機能）に回帰なし
 - [x] 副次的な発見: Escapeで新規項目をキャンセルする際に`QAbstractItemView::commitData called with an editor that does not belong to this view`というQt警告が出るが、これは今回の変更と無関係の既存挙動（変更前のコードでも「+」ボタン→Escapeのみで再現）。実害はなく（項目は正しく削除される）、今回のスコープ外として未修正
+
+## 複数選択時の削除が1件しか消えない不具合 ✅
+
+**背景**: 目次ツリーで複数項目を選択したときの挙動を確認したところ、階層変更・並び替え（`_move_selected` / `_indent_left` / `_indent_right`）は`_selected_root_items()`を使って選択全件を処理していたが、削除だけが`currentItem()`の1件しか消していなかった。
+
+- [x] `toc_panel.py`: `_delete_entry()`を`currentItem()`ベースから`_selected_root_items()`ベースに変更。祖先が選択されている子孫は除外されるため、親＋子を混在選択しても二重削除にならない。インデックスのズレを避けるため表示順の下側から削除する
+- [x] `_push_history()`は削除ループの前に1回だけ呼ぶ（Ctrl+Zで複数件がまとめて復元される）
+- [x] 削除後のカレント項目を復帰: 先頭の削除対象があった位置（同じ親の同インデックス、無ければ末尾）を選び直し、その親の子が全部消えた場合は親自身を選ぶ。連続削除でフォーカスが飛ばないようにする
+- [x] Delete/Backspaceキーのガードを`currentItem() is not None`から`selectedItems()`に変更（`_delete_entry`側の判定と揃える）
+- [x] headless(offscreen QPA)で確認: (1) トップレベル2件の同時選択で2件とも消える (2) 親＋その子を混在選択しても親のサブツリーが一度に消える (3) 子を全削除すると親がカレントになる (4) 全件削除で空になりカレントがNone (5) 選択なしでDeleteしてもクラッシュせず何も起きない (6) `toc_modified`が発火する（rowsRemoved経由）

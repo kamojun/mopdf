@@ -471,9 +471,15 @@ class MainWindow(QMainWindow):
         self._select_mode_active = False
         self._viewer.set_select_mode(False)
 
+        # 2つの挿入モードが同じ位置に落ち着くなら選ばせる意味がないので即挿入する
+        if not self._toc_panel.insert_modes_differ(page_index):
+            self._toc_panel.add_entry_with_title(text, page_index,
+                                                  insert_mode=INSERT_PAGE_ORDER)
+            return
+
         menu = QMenu(self)
-        below_action = menu.addAction("選択されている項目の下に挿入")
         page_order_action = menu.addAction("ページ番号順の位置に挿入")
+        below_action = menu.addAction("選択されている項目の下に挿入")
         chosen = menu.exec(QCursor.pos())
         if chosen is below_action:
             mode = INSERT_BELOW_SELECTED

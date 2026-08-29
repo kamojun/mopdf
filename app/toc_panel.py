@@ -2,7 +2,7 @@ from __future__ import annotations
 import csv
 import io
 import re
-from typing import Optional
+from typing import Iterator, Optional
 from PySide6.QtCore import Qt, Signal, QModelIndex, QTimer, QEvent, QItemSelectionModel
 from PySide6.QtGui import QDragEnterEvent, QDropEvent
 from PySide6.QtWidgets import (
@@ -355,6 +355,15 @@ class TocPanel(QWidget):
         """テキスト選択などから外部にエントリを追加する"""
         self._add_entry(title=title, page_index=page_index, insert_mode=insert_mode)
 
+    def insert_modes_differ(self, page_index: Optional[int]) -> bool:
+        """2つの挿入モードが実際に別々の位置になるかを返す。どちらも挿入位置を
+        `(親アイテム, 子インデックス)`として決めるので、それが一致すれば結果も同じ。
+        呼び出し側（テキスト選択からの追加）は`False`のときに挿入位置の選択メニューを
+        省略できる。"""
+        if page_index is None:
+            page_index = self._current_page  # `_add_entry`と同じフォールバック
+        return self._page_order_position(page_index) != self._below_selected_position()
+
     def show_search(self) -> None:
         """検索バーを表示しフォーカスする(Ctrl+Fから呼ばれる)。
         検索中はツリーの構造編集(追加/削除/移動/階層変更/D&D/インライン編集/
@@ -514,19 +523,13 @@ class TocPanel(QWidget):
 
         item = self._make_item(title, page_index)
         if insert_mode == INSERT_PAGE_ORDER and page_index is not None:
-            self._insert_item_by_page_order(item, page_index)
+            parent, index = self._page_order_position(page_index)
         else:
-            selected = self._tree.currentItem()
-            if selected:
-                parent = selected.parent()
-                if parent:
-                    idx = parent.indexOfChild(selected)
-                    parent.insertChild(idx if before else idx + 1, item)
-                else:
-                    idx = self._tree.indexOfTopLevelItem(selected)
-                    self._tree.insertTopLevelItem(idx if before else idx + 1, item)
-            else:
-                self._tree.addTopLevelItem(item)
+            parent, index = self._below_selected_position(before)
+        if parent is not None:
+            parent.insertChild(index, item)
+        else:
+            self._tree.insertTopLevelItem(index, item)
 
         self._tree.setCurrentItem(item)
         self._tree.editItem(item, 0)
@@ -535,32 +538,66 @@ class TocPanel(QWidget):
         self._pending_item = item
         self._staged_snapshot = snapshot
 
-    def _insert_item_by_page_order(self, item: QTreeWidgetItem, page_index: int) -> None:
-        """既存項目をget_toc()と同じ先行順（DFS）で走査し、page_index以下で
-        最後に見つかった項目の直後・同じ階層に挿入する。該当項目がなければ
-        末尾のトップレベル項目として追加する。"""
-        target: Optional[QTreeWidgetItem] = None
-
-        def walk(node: QTreeWidgetItem) -> None:
-            nonlocal target
-            page = node.data(0, Qt.ItemDataRole.UserRole)
-            if page is not None and page <= page_index:
-                target = node
+    def _iter_items(self) -> Iterator[QTreeWidgetItem]:
+        """ツリー全体をget_toc()と同じ先行順（DFS）で列挙する。"""
+        def walk(node: QTreeWidgetItem) -> Iterator[QTreeWidgetItem]:
+            yield node
             for i in range(node.childCount()):
-                walk(node.child(i))
+                yield from walk(node.child(i))
 
         for i in range(self._tree.topLevelItemCount()):
-            walk(self._tree.topLevelItem(i))
+            yield from walk(self._tree.topLevelItem(i))
 
-        if target is None:
-            self._tree.addTopLevelItem(item)
-            return
+    def _position_of(self, item: QTreeWidgetItem, *,
+                      after: bool) -> tuple[Optional[QTreeWidgetItem], int]:
+        """`item`と同じ階層の、その直前(after=False)/直後(after=True)を指す挿入位置。"""
+        parent = item.parent()
+        _count, index_of, _take, _insert = self._container_ops(parent)
+        return parent, index_of(item) + (1 if after else 0)
 
-        parent = target.parent()
-        if parent:
-            parent.insertChild(parent.indexOfChild(target) + 1, item)
-        else:
-            self._tree.insertTopLevelItem(self._tree.indexOfTopLevelItem(target) + 1, item)
+    def _page_order_position(self, page_index: int) -> tuple[Optional[QTreeWidgetItem], int]:
+        """ページ番号順で挿入すべき位置を`(親アイテム, 子インデックス)`で返す。
+        親が`None`ならトップレベル。先行順（DFS）で先頭から走査し、
+
+        - ページ未設定 / ページ < page_index の項目 → 読み飛ばして次へ
+        - ページ == page_index の項目 → 挿入の起点候補として覚え、以降その並びが
+          途切れた時点（未設定を含め、page_index以外が出た時点）で打ち切って
+          最後の起点の直後に入れる
+        - 起点を1つも見ないまま ページ > page_index の項目に当たった → その直前に入れる
+        - 最後まで該当がなければ末尾に追加する
+
+        いずれも見つけた項目と同じ階層に入れる。"""
+        last_same: Optional[QTreeWidgetItem] = None
+        first_after: Optional[QTreeWidgetItem] = None
+
+        for node in self._iter_items():
+            page = node.data(0, Qt.ItemDataRole.UserRole)
+            if last_same is not None:
+                if page != page_index:
+                    break  # 同じページ番号の並びが終わった → last_sameの直後で確定
+                last_same = node
+            elif page is None or page < page_index:
+                continue
+            elif page == page_index:
+                last_same = node
+            else:
+                first_after = node
+                break
+
+        if last_same is not None:
+            return self._position_of(last_same, after=True)
+        if first_after is not None:
+            return self._position_of(first_after, after=False)
+        return None, self._tree.topLevelItemCount()
+
+    def _below_selected_position(self, before: bool = False
+                                  ) -> tuple[Optional[QTreeWidgetItem], int]:
+        """選択中の項目の直下（before=Trueなら直上）・同じ階層の挿入位置を返す。
+        選択がなければ末尾のトップレベル項目として追加する位置を返す。"""
+        selected = self._tree.currentItem()
+        if selected is None:
+            return None, self._tree.topLevelItemCount()
+        return self._position_of(selected, after=not before)
 
     def _delete_item(self, item: QTreeWidgetItem) -> None:
         parent = item.parent()

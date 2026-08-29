@@ -10,6 +10,54 @@ PDFを見ながら、しおり（アウトライン）とページ番号の振�
 
 ---
 
+## ダウンロード（ビルド済みアプリ）
+
+Python環境を用意せずに使いたい場合は、[Releases](https://github.com/kamojun/mopdf/releases/latest) からビルド済みのアプリをダウンロードできます。
+
+| ファイル | 対象 |
+| --- | --- |
+| `mopdf-vX.Y.Z-macos-arm64.zip` | Apple Silicon搭載Mac（M1以降） |
+
+zipを展開して `mopdf.app` を「アプリケーション」フォルダへ移動してください。
+
+**初回起動時の注意（未署名アプリのため）**
+
+Apple Developer Programの署名・公証を行っていないため、ダウンロードしたアプリはそのままでは起動できません。ターミナルで以下を実行して隔離属性を外してください。
+
+```bash
+xattr -dr com.apple.quarantine /Applications/mopdf.app
+```
+
+ターミナルを使わない場合は、一度ダブルクリックして警告が出たあとに「システム設定 → プライバシーとセキュリティ」を開き、下部に表示される「このまま開く」を選んでください。
+
+> macOS 15 (Sequoia) 以降では、右クリック→「開く」による回避はできなくなっています。
+
+## インストール（ソースから）
+
+```bash
+git clone https://github.com/kamojun/mopdf.git
+cd mopdf
+pip install -r requirements.txt
+```
+
+**依存関係**
+
+- Python 3.10+
+- [PyMuPDF](https://pymupdf.readthedocs.io/) >= 1.23.0
+- [PySide6](https://doc.qt.io/qtforpython/) >= 6.6.0
+
+## 使い方
+
+ビルド済みアプリなら `mopdf.app` を起動します。ソースから使う場合は次を実行してください。
+
+```bash
+python main.py
+```
+
+PDFファイルをドラッグ&ドロップするか、メニューから「開く」で読み込んでください。
+
+目次のページ番号をどう入力すればよいかは「[ページ番号の考え方](#ページ番号の考え方)」を読んでください。ほとんどの場合、そこだけ分かれば使えます。
+
 ## PDFの「目次」は2つの要素でできている
 
 PDFで「目次」と呼ばれるものは、実は**独立した2つの仕組み**です。
@@ -336,50 +384,6 @@ start_page,style,prefix,first_num
 
 すべてのショートカットは「ヘルプ→キーボードショートカット...」からも確認できます。
 
-## ダウンロード（ビルド済みアプリ）
-
-Python環境を用意せずに使いたい場合は、[Releases](https://github.com/kamojun/mopdf/releases/latest) からビルド済みのアプリをダウンロードできます。
-
-| ファイル | 対象 |
-| --- | --- |
-| `mopdf-vX.Y.Z-macos-arm64.zip` | Apple Silicon搭載Mac（M1以降） |
-
-zipを展開して `mopdf.app` を「アプリケーション」フォルダへ移動してください。
-
-**初回起動時の注意（未署名アプリのため）**
-
-Apple Developer Programの署名・公証を行っていないため、ダウンロードしたアプリはそのままでは起動できません。ターミナルで以下を実行して隔離属性を外してください。
-
-```bash
-xattr -dr com.apple.quarantine /Applications/mopdf.app
-```
-
-ターミナルを使わない場合は、一度ダブルクリックして警告が出たあとに「システム設定 → プライバシーとセキュリティ」を開き、下部に表示される「このまま開く」を選んでください。
-
-> macOS 15 (Sequoia) 以降では、右クリック→「開く」による回避はできなくなっています。
-
-## インストール（ソースから）
-
-```bash
-git clone https://github.com/kamojun/mopdf.git
-cd mopdf
-pip install -r requirements.txt
-```
-
-**依存関係**
-
-- Python 3.10+
-- [PyMuPDF](https://pymupdf.readthedocs.io/) >= 1.23.0
-- [PySide6](https://doc.qt.io/qtforpython/) >= 6.6.0
-
-## 使い方
-
-```bash
-python main.py
-```
-
-PDFファイルをドラッグ&ドロップするか、メニューから「開く」で読み込んでください。
-
 ## macOS向けスタンドアローンアプリのビルド
 
 Python環境なしで起動できる `mopdf.app` をPyInstallerでビルドできます。
@@ -391,7 +395,7 @@ open dist/mopdf.app
 ```
 
 - `dist/mopdf.app` が生成されます。アイコンを更新する場合は `assets/icon.png` を差し替えて `python scripts/make_icon.py` を再実行してください（Pillowが必要です）。
-- 自分でビルドした `mopdf.app` はそのまま起動できます（隔離属性が付かないため、上記の`xattr`は不要です）。
+- 自分でビルドした `mopdf.app` はそのまま起動できます（隔離属性が付かないため、ダウンロード版で必要な`xattr`の操作は不要です）。
 - 配布用にzipへ固める場合は `ditto -c -k --sequesterRsrc --keepParent dist/mopdf.app mopdf.zip` を使ってください（`zip`コマンドはアプリバンドル内のシンボリックリンクを壊すことがあります）。
 
 ## ライセンス

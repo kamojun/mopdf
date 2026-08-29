@@ -37,6 +37,7 @@ class MainWindow(QMainWindow):
         self._pending_old_label_texts: Optional[dict[int, str]] = None
         self._pending_old_page_labels: Optional[list[PageLabelRange]] = None
         self._edit_history: list[tuple[list[TocEntry], list[PageLabelRange]]] = []
+        self._redo_history: list[tuple[list[TocEntry], list[PageLabelRange]]] = []
 
         self._setup_ui()
         self._setup_menu()
@@ -122,6 +123,10 @@ class MainWindow(QMainWindow):
         # Ctrl+Z: 目次・ページラベル共通のUndo(どちらにフォーカスがあっても効く)
         self._undo_shortcut = QShortcut(QKeySequence(QKeySequence.StandardKey.Undo), self)
         self._undo_shortcut.activated.connect(self._undo)
+
+        # Ctrl+Shift+Z (macOSではCmd+Shift+Z): 目次・ページラベル共通のRedo
+        self._redo_shortcut = QShortcut(QKeySequence(QKeySequence.StandardKey.Redo), self)
+        self._redo_shortcut.activated.connect(self._redo)
 
     def _setup_menu(self) -> None:
         menubar = self.menuBar()
@@ -320,6 +325,7 @@ class MainWindow(QMainWindow):
         self._page_label_baseline = self._page_label_panel.get_page_labels()
         self._unsaved = False
         self._edit_history = []
+        self._redo_history = []
         self._update_title()
         self._update_status(0)
 
@@ -557,6 +563,8 @@ class MainWindow(QMainWindow):
         self._edit_history.append((toc_snapshot, label_snapshot))
         if len(self._edit_history) > self._MAX_HISTORY:
             self._edit_history.pop(0)
+        # 新しい編集が入った時点で、それ以前のRedo履歴は無効になる
+        self._redo_history.clear()
 
     def _undo(self) -> None:
         if not self._edit_history or not self._doc.is_open:
@@ -567,7 +575,32 @@ class MainWindow(QMainWindow):
         self._pending_old_page_labels = None
         self._label_change_timer.stop()
 
+        self._redo_history.append((self._toc_panel.get_toc(), self._doc.get_page_labels()))
+        if len(self._redo_history) > self._MAX_HISTORY:
+            self._redo_history.pop(0)
+
         toc_snapshot, label_snapshot = self._edit_history.pop()
+        self._toc_panel._build_tree_from_entries(toc_snapshot)
+        self._doc.set_page_labels(label_snapshot)
+        self._page_label_panel._rebuild()
+        self._viewer.refresh_page_labels()
+        self._toc_panel.refresh_page_labels()
+        self._update_status(self._current_page)
+        self._recompute_unsaved_state()
+
+    def _redo(self) -> None:
+        if not self._redo_history or not self._doc.is_open:
+            return
+        # 進行中のページラベル編集バーストがあれば破棄する(_undoと同様)
+        self._pending_old_label_texts = None
+        self._pending_old_page_labels = None
+        self._label_change_timer.stop()
+
+        self._edit_history.append((self._toc_panel.get_toc(), self._doc.get_page_labels()))
+        if len(self._edit_history) > self._MAX_HISTORY:
+            self._edit_history.pop(0)
+
+        toc_snapshot, label_snapshot = self._redo_history.pop()
         self._toc_panel._build_tree_from_entries(toc_snapshot)
         self._doc.set_page_labels(label_snapshot)
         self._page_label_panel._rebuild()

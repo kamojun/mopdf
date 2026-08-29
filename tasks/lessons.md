@@ -1,5 +1,14 @@
 # 学びの記録
 
+## 2026-08-29
+
+### macOSでダブルクリック起動が二重起動する原因は同一bundle idの複数コピー
+
+- **状況**: パッケージング済み`mopdf.app`（`dist/mopdf.app`）をFinderでダブルクリックしてPDFを2つ開いたら、ウィンドウが2個（＝プロセスが2個）できた。`main.py`の`Application.event()`は`QFileOpenEvent`受信時に既存の`self.window`へ`open_pdf()`するだけで新規ウィンドウは作らないコードなので、一見コードのバグに見えた
+- **切り分け**: `open -a dist/mopdf.app file.pdf`を2回実行（Finderのダブルクリックと同じLaunch Services経路）→ `ps aux`で確認すると同一PIDのまま増えず、コード自体は正しく動作することを確認
+- **原因**: `/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -dump | grep -i "mopdf.app"` で調べたところ、`~/Desktop/mopdf.app`（8/15、過去のパッケージング検証で持ち出した残骸）と`dist/mopdf.app`の2つが同じbundle id(`com.kamojun.mopdf`)で別パス登録されていた。macOSの「既存プロセスへ回す」判定はバンドルパス単位のため、ダブルクリックのたびにどちらへ解決されるかで新規プロセスが増える
+- **ルール**: macOSアプリの「ダブルクリックで既存ウィンドウに切り替わるはずが二重起動する」系の不具合は、まずコードを疑う前に`lsregister -dump | grep -i "<appname>.app"`で同一bundle idの重複登録（Desktop等に持ち出した古いコピー）を確認する。再現テストは`open -a <path> <file>`＋`ps aux`でプロセス数を見れば、Finderの実操作なしでも検証できる
+
 ## 2026-08-15
 
 ### QTreeWidgetで`model().blockSignals(True)`を使うとQt内部配線ごと止まりクラッシュする

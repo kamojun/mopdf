@@ -151,11 +151,9 @@
 - [x] READMEに「macOS向けスタンドアローンアプリのビルド」節を追記（ビルド手順、Gatekeeper未署名のため初回は右クリック→開くが必要な旨）
 - [x] ビルド確認: `pyinstaller mopdf.spec`が成功し`dist/mopdf.app`が生成されることを確認
 - [x] 実機確認: 合成テストPDF（3ページ、目次3件）をCLI引数で渡して`open dist/mopdf.app --args test.pdf`起動→スクリーンショットで、コンソールウィンドウなし・メニューバーに「mopdf」表示・目次パネルに3件のChapter表示・PDF本文が正しくレンダリングされることを確認（PyMuPDFのネイティブバンドルが機能している実質的な検証）
-- [ ] 未検証（今回スコープ外・ユーザー判断でテスト省略）: Cmd+S保存、QFileOpenEvent経由のダブルクリック/Open With起動、最近使ったファイル（QSettings）の永続化。いずれもコード上は妥当だが実機の自動UI操作は本セッションの環境でAccessibility権限がなく実施できなかった
-
-## 目次のcut/paste移動機能
-
-- [ ] 目次エントリをcutして別の場所にpasteで移動できる機能を追加
+- [x] 実機確認(2026-08-29): Cmd+S保存 — 動作確認OK
+- [x] 実機確認(2026-08-29): QFileOpenEvent経由のダブルクリック/Open With起動 — 初回はFinderで二重起動(ウィンドウ2個)が発生したが、原因はコードのバグではなく`~/Desktop`に残っていた過去ビルドの`mopdf.app`コピーが`dist/mopdf.app`と同じbundle id(`com.kamojun.mopdf`)で別パス登録され、Launch Servicesの「既存プロセスへ回す」判定がバンドルパス単位のため割れていたこと（詳細は`tasks/lessons.md`2026-08-29参照）。デスクトップの古いコピーを削除後、二重起動しないことを確認
+- [x] 実機確認(2026-08-29): 最近使ったファイル（QSettings）の永続化 — 動作確認OK
 
 ## 目次・ページラベルのUndo履歴を一本化 ✅
 
@@ -167,7 +165,7 @@
 - [x] `main_window.py`: `_setup_ui()`にグローバル`QShortcut(QKeySequence.StandardKey.Undo)`を追加（`self._escape_shortcut`と同じパターン）。目次ツリー・ページラベル表のどちらにフォーカスがあっても同じCtrl+Zで効く。`open_pdf()`で`_edit_history`をクリア
 - [x] `shortcuts_dialog.py`: `Ctrl+Z`の説明を`TocPanel.TREE_SHORTCUTS_HELP`から、メニューにもツリーにも属さない単発`QShortcut`向けの`_MISC_SHORTCUTS_HELP`に移設
 - [x] headless(offscreen QPA)スクリプトで確認: (1) 目次のみ編集→undoで目次だけ戻りラベルは無関係 (2) ページラベルのみ編集(1バースト・複数フィールド変更)→undoで1回にまとまって戻り目次は無関係 (3) 追加時の`_staged_snapshot`が`closeEditor`確定経由で正しく積まれる (4) 「ページラベル変更で目次のページ表示を保つか」ダイアログの「キャンセル」が`_undo()`を正しく呼ぶ (5) 新しいPDFを開くと履歴がクリアされる (6) 単一ウィンドウをアクティブにした状態で、ページラベル表にフォーカスがある状態から実際のCtrl+Zキーイベント(`QTest.keyClick`)を送って目次の削除が正しく取り消されることを確認（複数ウィンドウ同時存在時は`WindowShortcut`コンテキストがheadless環境で不安定になり発火しないことがあったが、これはテスト環境固有の問題で実装のバグではないと判断）
-- [ ] Redo機能は今回のスコープ外（`Cmd+Shift+Z`等で再実行できるようにする）は将来の課題として残す
+- [x] Redo機能を追加。`_redo_history`スタックを新設し`_undo`と対称の`_redo`を実装。`_push_history()`（新しい編集が入るたび）でRedo履歴をクリアする標準的な挙動、`open_pdf()`でも`_edit_history`と合わせてクリア。`QKeySequence.StandardKey.Redo`（macOSでは`Cmd+Shift+Z`）のグローバルショートカットを追加
 
 ## 目次内検索・フィルター ✅
 

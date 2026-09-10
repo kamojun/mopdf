@@ -1,7 +1,18 @@
 # -*- mode: python ; coding: utf-8 -*-
+import os
+
 from PyInstaller.utils.hooks import collect_all
 
 datas, binaries, hiddenimports = collect_all("fitz")
+
+# 配布用に署名する場合のみ、環境変数で証明書を指定する。
+#   MOPDF_CODESIGN_IDENTITY="Developer ID Application: ... (TEAMID)" pyinstaller mopdf.spec
+# 未設定なら従来どおりad-hoc署名になる（開発中のビルドはこれでよい）。
+# identityを渡すとPyInstallerがcodesignに --options=runtime (Hardened Runtime) と
+# --timestamp を自動で付与する。どちらも公証(notarization)の必須要件。
+# BUNDLEはEXEからこの2つを引き継いで .app 全体を署名するので、EXEにだけ渡せばよい。
+CODESIGN_IDENTITY = os.environ.get("MOPDF_CODESIGN_IDENTITY") or None
+ENTITLEMENTS_FILE = "entitlements.plist" if CODESIGN_IDENTITY else None
 
 a = Analysis(
     ["main.py"],
@@ -44,6 +55,8 @@ exe = EXE(
     upx=False,
     console=False,
     disable_windowed_traceback=False,
+    codesign_identity=CODESIGN_IDENTITY,
+    entitlements_file=ENTITLEMENTS_FILE,
 )
 
 coll = COLLECT(
@@ -60,9 +73,9 @@ app = BUNDLE(
     name="mopdf.app",
     icon="assets/icon.icns",
     bundle_identifier="com.kamojun.mopdf",
-    version="0.1.0",
+    version="0.1.1",
     info_plist={
-        "CFBundleShortVersionString": "0.1.0",
+        "CFBundleShortVersionString": "0.1.1",
         "NSHighResolutionCapable": True,
         "CFBundleDocumentTypes": [
             {

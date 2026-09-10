@@ -286,3 +286,59 @@
 - [x] ページラベルCSV（`start_page,style,prefix,first_num` の4列固定）とスタイルコード表（`D`/`r`/`R`/`a`/`A`/空）を追加
 - [x] 既存の機能一覧は残しつつ、Undo/Redoを「共通」に分離。抜けていた `Ctrl+F`（目次検索）と `Ctrl+Shift+Z`（Redo）をショートカット表に追加
 - [x] 記載内容は `toc_panel.py` の `export_csv()` / `_parse_csv_with_warnings()` / `_parse_txt_list()` / `_resolve_page()` / `_page_str_for_export()`、`page_label_panel.py` の `export_csv()` / `_parse_csv_with_warnings()`、`pdf_document.py` の `STYLE_LABELS` / `PageLabelRange` / `find_page_by_label()` を読んで実装と突き合わせた
+
+## ビルド済みアプリをGitHub Releasesで配布（macOS arm64・手動リリース） ✅
+
+**背景**: 「ビルドが面倒な人向けにビルド済みアプリも配布したい」という要望。PyInstallerはクロスコンパイルできないため、手元のApple Silicon MacではmacOS arm64版のみビルド可能。Intel Mac / Windows / Linux版が必要になった段階でGitHub Actionsのマトリックスビルドに移行する（`macos-13` / `macos-14` / `windows-latest` / `ubuntu-latest`）。今回はまず手動リリースで1本出す。
+
+- [x] `pyinstaller --noconfirm --clean mopdf.spec` で最新コミットから再ビルド（`dist/mopdf.app` = 167MB, arm64, adhoc署名）
+- [x] ビルドした `.app` を起動して動作確認
+- [x] `ditto -c -k --sequesterRsrc --keepParent` でzip化（68MB）。`zip`コマンドはアプリバンドル内のシンボリックリンクを壊すため使わない
+- [x] zipを展開し直して `codesign --verify --deep --strict` 通過＋起動を確認（配布物そのものを検証）
+- [x] README: 「ダウンロード（ビルド済みアプリ）」節を追加。Releasesへのリンク・対象アーキ表・展開手順を記載
+- [x] README: Gatekeeper回避手順を修正。**macOS 15 (Sequoia) 以降は「右クリック→開く」で未署名アプリを開けなくなっている**ため、`xattr -dr com.apple.quarantine` と「システム設定→プライバシーとセキュリティ→このまま開く」に差し替えた（旧記述のままだとダウンロードした人が「壊れているため開けません」で詰まる）
+- [x] README: ビルド節に「自分でビルドした`.app`は隔離属性が付かないので`xattr`不要」と配布用zipの作り方を追記
+
+**バイナリはgit管理下に置かない**: リポジトリが肥大化するため、`dist/` は`.gitignore`済みのままGitHub Releasesの添付ファイルとしてのみ配布する。
+
+**今後の課題**（v0.1.0時点では未対応、リリースを止めるものではない）:
+
+- [ ] **署名・公証（notarization）**: 検討した結果、v0.1.0は未署名で公開する判断。Apple Developer Program（年額$99）への加入が必須で、無料のApple IDでは配布用のDeveloper ID Application証明書を取得できないため。加入すれば `mopdf.spec` の `EXE()` / `BUNDLE()` に `codesign_identity` と `entitlements_file` を渡し、`xcrun notarytool submit --wait` → `xcrun stapler staple` で公証まで通せる（hardened runtime必須）。実現すればREADMEの `xattr` 案内が丸ごと不要になり、ダウンロード→ダブルクリックで起動できるようになる = 最大の離脱ポイントの解消。反応を見て判断する
+- [ ] **バージョン番号の一元管理**: 現在バージョンを持っているのは `mopdf.spec` の2箇所（`version=` と `CFBundleShortVersionString`）のみで、gitタグとは自動連動しない。次のリリースで直し忘れると「タグはv0.2.0なのにアプリ情報は0.1.0」のズレが起きる。`app/__init__.py` に `__version__` を置いてspecがそれを読む形にする
+- [ ] **アプリ内のバージョン表示**: About（「mopdfについて」）ダイアログがなく、利用者が自分のバージョンを確認できない。不具合報告時に困るため `main_window.py` のヘルプメニュー（`_build_menus()` 内）に追加する
+- [ ] **Intel Mac / Windows / Linux版**: 必要になった時点でGitHub Actionsのマトリックスビルド（`macos-13` / `macos-14` / `windows-latest` / `ubuntu-latest`）に移行する。Windows版を署名する場合は別途コードサイニング証明書が必要（年$200〜400）
+
+## macOSアプリの署名・公証（notarization）対応 ✅
+
+**背景**: v0.1.0は未署名で公開したが（上記「今後の課題」参照）、ユーザーがApple Developer Programに加入済みと判明したため追加費用なしで対応できることになった。実現すればREADMEの `xattr` 案内が不要になり、ダウンロード→ダブルクリックで起動できる。
+
+**判明した前提**: 手元のキーチェーンにあったのは `Apple Development` 証明書2枚（1枚は2024-11-14に期限切れ、もう1枚は2027-03-15まで有効）のみで、**配布用の `Developer ID Application` 証明書は1枚もなかった**。Apple Developmentは自分の実機で動かす開発用で、これで署名して公証に出しても弾かれる。Team IDは証明書のOUフィールドから `P7YFQ85E2Z`。notarytool 1.1.2 / stapler / Xcode CLT は利用可能。
+
+- [x] `entitlements.plist` を作成。Hardened Runtimeが既定で禁止するCPython/Qtの動作を許可する3つの例外（`allow-jit` / `allow-unsigned-executable-memory` / `disable-library-validation`）。セキュリティを弱めるものなので、動作確認後に削れるものは削る（下記の未了項目）
+- [x] `mopdf.spec`: 環境変数 `MOPDF_CODESIGN_IDENTITY` が設定されている時だけ署名する形にした。未設定なら従来どおりad-hoc署名なので、開発中の `pyinstaller mopdf.spec` は今までどおり動く
+  - PyInstallerのソースを読んで確認した点2つ: (1) `sign_binary()` はidentity指定時に `--options=runtime`（Hardened Runtime）と `--timestamp` を自動付与する＝公証の必須要件が自動で満たされる、(2) `BUNDLE` は `EXE` から `codesign_identity` / `entitlements_file` を継承する（`building/osx.py:104-116`）ので **EXEにだけ渡せばよい**
+- [x] `scripts/release_macos.sh` を作成。ビルド→署名検証→Hardened Runtime確認→公証提出→staple→`spctl` 判定→配布用zip作成→SHA-256表示までを一括実行。ビルドに数分かかるため、**証明書とnotarytool認証情報の確認を最初に行って早期に落とす**構成にした。公証失敗時は `notarytool log` で詳細を自動表示
+  - **stapleは必ずzip化の前**。提出用zipは転送用の入れ物にすぎず、公証チケットは `.app` 側に貼り付けられる。staple前に作ったzipにはチケットが入っていない
+- [x] 証明書が無い状態でスクリプトを実行して検証。**バグを1件発見して修正**: `set -e` + `pipefail` の下で `grep` が不一致時に終了コード1を返し、案内メッセージを表示する前にスクリプトが落ちていた（`|| true` で受けるよう修正）
+
+- [x] Developer ID Application 証明書を作成（ユーザー操作）。`Developer ID Application: Jun Kamohara (P7YFQ85E2Z)`、発行元 `Developer ID Certification Authority`、秘密鍵ペアあり。**Team IDが `P7YFQ85E2Z` で確定**（証明書名の括弧内・UID・OUの3つすべてが一致）。有効期限は2027-02-01と短く、会員資格の期限に合わせて発行されたものと思われる
+- [x] App用パスワードを発行し `notarytool store-credentials` で保存（ユーザー操作）。`--password` を省略して安全なプロンプトで入力する方式にした。zshの `histignorespace` が無効なため、コマンドラインに直接書くと平文で履歴に残るのを避けるため
+- [x] `mopdf.spec` のバージョンを0.1.1に更新（2箇所）
+- [x] `./scripts/release_macos.sh 0.1.1` で公証まで通した。`status: Accepted` → staple成功 → `spctl: accepted, source=Notarized Developer ID`
+- [x] READMEを署名済み前提に書き換え。「ダウンロード」節から `xattr` の手順を削除し、初回だけ「インターネットからダウンロードされたアプリケーションです」の確認が出る旨に変更（v0.1.0向けの旧手順は注記として残した）。ビルド節に「配布用ビルド（署名・公証つき）」を追加
+- [ ] `entitlements.plist` の3つの例外を1つずつ削って再ビルド・起動確認し、不要なものを外す
+- [ ] v0.1.1 としてGitHub Releasesに公開（ユーザー操作）
+
+**実行して初めて分かったスクリプトのバグ3件**（いずれも机上では気づけなかった）:
+
+1. **証明書未検出時にメッセージが出ずに落ちる**: `set -e` + `pipefail` の下で `grep` が不一致時に終了コード1を返し、案内文を表示する前にスクリプトが死んでいた。`|| true` で受けて修正
+2. **`notarytool history --limit` は存在しない**: notarytool 1.1.2 に `--limit` オプションはなく `Unknown option` で落ちる。認証情報は正常なのに「プロファイルが使えません」と誤報していた。フラグを削除
+3. **`pipefail` + `grep -q` でHardened Runtimeを誤判定**: `grep -q` は一致した時点で即終了するため、まだ出力中の `codesign` がSIGPIPEで死んで終了コード141になり、`pipefail` がそれを拾ってパイプライン全体が失敗扱いになっていた。**署名は正常なのに検証が落ちる**という紛らわしい失敗。`codesign` の出力を一度変数に受けてからherestringで `grep` に渡すよう修正
+
+**配布物の検証**（zipを展開し直して実施）:
+
+- `xattr -w com.apple.quarantine` で**ダウンロード状態を再現**したうえで `spctl -a -vvv -t exec` が `accepted / source=Notarized Developer ID` を返すことを確認
+- 公証チケットがzipを経由しても保持されている（`stapler validate` 成功）ことを確認
+- 隔離属性なしで実際に起動し、**Hardened Runtime下でも実行時に落ちない**ことを確認（公証が通っても実行時に落ちるケースがあるため別途確認が必要）
+- 隔離属性ありの起動では `CoreServicesUIAgent` が動作＝Gatekeeperの確認ダイアログ待ち。これは公証済みアプリの正常な挙動で、未署名時の「開発元を確認できません」というブロックとは別物
+- `CFBundleShortVersionString` が `0.1.1` になっていること、zipサイズがv0.1.0と同じ68MBで肥大化していないことを確認

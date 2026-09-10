@@ -18,19 +18,11 @@ Python環境を用意せずに使いたい場合は、[Releases](https://github.
 | --- | --- |
 | `mopdf-vX.Y.Z-macos-arm64.zip` | Apple Silicon搭載Mac（M1以降） |
 
-zipを展開して `mopdf.app` を「アプリケーション」フォルダへ移動してください。
+zipを展開して `mopdf.app` を「アプリケーション」フォルダへ移動し、ダブルクリックで起動してください。
 
-**初回起動時の注意（未署名アプリのため）**
+配布しているアプリはApple Developer IDで**署名・公証（notarization）済み**です。ターミナルでの操作は必要ありません。初回起動時だけ「インターネットからダウンロードされたアプリケーションです。開いてもよろしいですか？」という確認が出るので「開く」を選んでください。2回目以降は出ません。
 
-Apple Developer Programの署名・公証を行っていないため、ダウンロードしたアプリはそのままでは起動できません。ターミナルで以下を実行して隔離属性を外してください。
-
-```bash
-xattr -dr com.apple.quarantine /Applications/mopdf.app
-```
-
-ターミナルを使わない場合は、一度ダブルクリックして警告が出たあとに「システム設定 → プライバシーとセキュリティ」を開き、下部に表示される「このまま開く」を選んでください。
-
-> macOS 15 (Sequoia) 以降では、右クリック→「開く」による回避はできなくなっています。
+> v0.1.0 のみ未署名で配布していました。こちらを使う場合は、初回起動前に `xattr -dr com.apple.quarantine /Applications/mopdf.app` を実行するか、ダブルクリック後に「システム設定 → プライバシーとセキュリティ」から「このまま開く」を選ぶ必要があります。v0.1.1 以降では不要です。
 
 ## インストール（ソースから）
 
@@ -395,8 +387,31 @@ open dist/mopdf.app
 ```
 
 - `dist/mopdf.app` が生成されます。アイコンを更新する場合は `assets/icon.png` を差し替えて `python scripts/make_icon.py` を再実行してください（Pillowが必要です）。
-- 自分でビルドした `mopdf.app` はそのまま起動できます（隔離属性が付かないため、ダウンロード版で必要な`xattr`の操作は不要です）。
-- 配布用にzipへ固める場合は `ditto -c -k --sequesterRsrc --keepParent dist/mopdf.app mopdf.zip` を使ってください（`zip`コマンドはアプリバンドル内のシンボリックリンクを壊すことがあります）。
+- 自分でビルドした `mopdf.app` はそのまま起動できます（隔離属性が付かないため、Gatekeeperの確認は出ません）。この手順ではad-hoc署名になります。
+
+### 配布用ビルド（署名・公証つき）
+
+Releasesで配布しているzipは、次のスクリプトで作っています。
+
+```bash
+./scripts/release_macos.sh 0.1.1
+```
+
+ビルド → 署名 → 公証（notarization）→ staple → Gatekeeper判定の確認 → 配布用zip作成までを一括で行います。実行には次の2つが必要です。
+
+- **Developer ID Application 証明書**（Apple Developer Programの加入が必要）。Xcode → Settings → Accounts → Manage Certificates… → ＋ → Developer ID Application で作成します。開発用の「Apple Development」証明書では配布できません
+- **notarytoolの認証情報**。[appleid.apple.com](https://appleid.apple.com/) でApp用パスワードを発行し、次のコマンドで保存します（`--password` を省略すると安全なプロンプトで入力できます）
+
+  ```bash
+  xcrun notarytool store-credentials "mopdf-notary" \
+    --apple-id "<Apple ID>" --team-id "<Team ID>"
+  ```
+
+`mopdf.spec` は環境変数 `MOPDF_CODESIGN_IDENTITY` が設定されているときだけ署名を行います。未設定なら従来どおりad-hoc署名なので、開発中の `pyinstaller mopdf.spec` の挙動は変わりません。署名時はPyInstallerが `--options=runtime`（Hardened Runtime）と `--timestamp` を自動で付与します。どちらも公証の必須要件です。
+
+Hardened RuntimeはCPython/Qtが必要とする動作を既定で禁止するため、`entitlements.plist` で例外を指定しています。
+
+なお配布用zipは `ditto -c -k --sequesterRsrc --keepParent` で固めます（`zip`コマンドはアプリバンドル内のシンボリックリンクを壊すことがあります）。**staple の後に固めること** — 公証チケットは `.app` に貼り付けられるため、staple前に作ったzipにはチケットが入りません。
 
 ## ライセンス
 

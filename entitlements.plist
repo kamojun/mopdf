@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  公証(notarization)にはHardened Runtimeが必須だが、Hardened Runtimeは
+  CPythonやQtが使う動的コード生成・dylibの動的ロードを既定で禁止する。
+  PyInstallerで固めたPython/Qtアプリを起動可能にするため、以下を緩める。
+
+  いずれもAppleに許可されている例外だが、セキュリティを弱めるものなので
+  本当に必要なものだけを残したい。将来ここを削って再ビルド・起動確認し、
+  問題なければ外すこと（tasks/todo.md 参照）。
+-->
+<plist version="1.0">
+<dict>
+    <!-- Qt/Pythonの一部が実行可能メモリを生成する（JITに相当する動作）ため -->
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+
+    <!-- CPythonのctypes等が署名されていない実行可能メモリを使うため -->
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+
+    <!-- PyInstallerが同梱する多数の .so / .dylib を実行時にロードするため -->
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+</dict>
+</plist>

@@ -21,6 +21,14 @@ COL_STYLE = 1
 COL_PREFIX = 2
 COL_FIRST = 3
 
+# 英大文字 → ローマ数字 → アラビア数字 を書籍の自然な並びとみなし、
+# 最も手前の範囲の手前が空いていれば、1つ手前の段のスタイルを提案する
+FRONT_MATTER_PROPOSALS = {
+    "D": ("r", "ローマ数字（i, ii, …）"),
+    "r": ("A", "英字（A, B, …）"),
+    "R": ("A", "英字（A, B, …）"),
+}
+
 
 class PageLabelDelegate(QStyledItemDelegate):
     """列ごとに適切なエディタを提供するDelegate。"""
@@ -96,6 +104,7 @@ class PageLabelPanel(QWidget):
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self._doc: Optional[PdfDocument] = None
+        self._structural_edit_pending = False
         self.setAcceptDrops(True)
 
         layout = QVBoxLayout(self)
@@ -390,8 +399,31 @@ class PageLabelPanel(QWidget):
         self._populate_row(row, PageLabelRange(start_page=start_page, style="D", prefix="", first_num=1))
         self._table.blockSignals(False)
         self._table.selectRow(row)
+        # 通知より前に提案し、受け入れた分もUndo 1ステップにまとめる
+        self._maybe_propose_front_matter(start_page, "D")
         self._sort_rows()
         self.page_labels_modified.emit()
+
+    def _maybe_propose_front_matter(self, start_page: int, style: str) -> None:
+        """最も手前の範囲の手前にページが残っていれば、1ページ目からの前付けラベルを提案する。"""
+        proposal = FRONT_MATTER_PROPOSALS.get(style)
+        if proposal is None or start_page <= 0:
+            return
+        if any(r.start_page < start_page for r in self.get_page_labels()):
+            return
+        new_style, description = proposal
+        reply = QMessageBox.question(
+            self, "ページラベルの提案",
+            f"1〜{start_page}ページに{description}のページラベルを付けますか？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        row = self._table.rowCount()
+        self._table.setRowCount(row + 1)
+        self._table.blockSignals(True)
+        self._populate_row(row, PageLabelRange(start_page=0, style=new_style, prefix="", first_num=1))
+        self._table.blockSignals(False)
 
     def _sort_rows(self) -> None:
         """表の行を開始ページ順に並べ直す（表示のみ）。アイテムを作り直さないので、
@@ -436,8 +468,25 @@ class PageLabelPanel(QWidget):
             self.page_jump_requested.emit(page)
 
     def _on_item_changed(self, item: QTableWidgetItem) -> None:
-        if item.column() == COL_START:
-            # DelegateのsetModelDataがsetDataを2回呼ぶ途中で行が動くと、
-            # 2回目が別の行に書き込まれるため、編集確定後まで遅らせる
-            QTimer.singleShot(0, self._sort_rows)
+        if item.column() in (COL_START, COL_STYLE):
+            # DelegateのsetModelDataがsetDataを2回呼ぶ途中で行が動いたりダイアログを
+            # 出したりすると、2回目が別の行に書き込まれるため、編集確定後まで遅らせる
+            if not self._structural_edit_pending:
+                self._structural_edit_pending = True
+                QTimer.singleShot(0, lambda: self._finish_structural_edit(item))
+            return
+        self.page_labels_modified.emit()
+
+    def _finish_structural_edit(self, item: QTableWidgetItem) -> None:
+        """開始ページ・スタイルの編集確定後に、提案 → 並べ替え → 通知を1回で行う。"""
+        self._structural_edit_pending = False
+        row = item.row()
+        start_item = self._table.item(row, COL_START)
+        style_item = self._table.item(row, COL_STYLE)
+        if start_item is not None and style_item is not None:
+            self._maybe_propose_front_matter(
+                start_item.data(Qt.ItemDataRole.UserRole),
+                style_item.data(Qt.ItemDataRole.UserRole),
+            )
+        self._sort_rows()
         self.page_labels_modified.emit()

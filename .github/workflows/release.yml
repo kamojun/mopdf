@@ -66,11 +66,13 @@ jobs:
             -k "$KEYCHAIN_PATH" -T /usr/bin/codesign
           rm -f "$CERT_PATH"
 
-          # 書き出した .p12 には中間証明書が入らないので、チェーンを組めるよう入れておく
-          # （G1: 2019年以前の証明書 / G2: それ以降）
+          # チェーンを組めるよう Apple の中間証明書も入れておく（G1: 2019年以前の証明書 / G2: それ以降）。
+          # 書き出し方によっては .p12 に中間証明書が含まれているので、既にあるエラーは無視する
           for ca in DeveloperIDCA DeveloperIDG2CA; do
             curl -fsSL -o "$RUNNER_TEMP/$ca.cer" "https://www.apple.com/certificateauthority/$ca.cer"
-            security import "$RUNNER_TEMP/$ca.cer" -k "$KEYCHAIN_PATH"
+            if ! out="$(security import "$RUNNER_TEMP/$ca.cer" -k "$KEYCHAIN_PATH" 2>&1)"; then
+              grep -q "already exists" <<<"$out" || { echo "$out" >&2; exit 1; }
+            fi
           done
 
           # codesign が許可ダイアログなしで秘密鍵を使えるようにする

@@ -246,7 +246,7 @@ class TocPanel(QWidget):
         )
         self._tree.setItemDelegateForColumn(
             1, PageLineDelegate(
-                self._get_page_display_text, self._resolve_page,
+                self._get_page_display_text, self.resolve_page,
                 on_enter=self._on_page_enter,
                 get_seed_text=self._get_page_edit_seed_text,
                 parent=self,
@@ -330,7 +330,7 @@ class TocPanel(QWidget):
         lines = []
         for e in entries:
             indent = "  " * (e.level - 1)
-            page_text = self._format_page_for_display(e.page)
+            page_text = self.format_page_for_display(e.page)
             lines.append(f"[Lv.{e.level}] {indent}{e.title} [{page_text}]")
         return lines
 
@@ -339,7 +339,7 @@ class TocPanel(QWidget):
         ページラベルには依存しないため、ページラベルだけの変更を目次側の変更として検出しない。"""
         return [f"{e.level}|{e.title}|{e.page}" for e in entries]
 
-    def _format_page_for_display(self, page0: Optional[int]) -> str:
+    def format_page_for_display(self, page0: Optional[int]) -> str:
         """ステータスバーの実ページ表示と同じ形式(ラベル(物理/全体))で返す。"""
         if page0 is None:
             return "?"
@@ -354,15 +354,6 @@ class TocPanel(QWidget):
                               insert_mode: str = INSERT_BELOW_SELECTED) -> None:
         """テキスト選択などから外部にエントリを追加する"""
         self._add_entry(title=title, page_index=page_index, insert_mode=insert_mode)
-
-    def insert_modes_differ(self, page_index: Optional[int]) -> bool:
-        """2つの挿入モードが実際に別々の位置になるかを返す。どちらも挿入位置を
-        `(親アイテム, 子インデックス)`として決めるので、それが一致すれば結果も同じ。
-        呼び出し側（テキスト選択からの追加）は`False`のときに挿入位置の選択メニューを
-        省略できる。"""
-        if page_index is None:
-            page_index = self._current_page  # `_add_entry`と同じフォールバック
-        return self._page_order_position(page_index) != self._below_selected_position()
 
     def show_search(self) -> None:
         """検索バーを表示しフォーカスする(Ctrl+Fから呼ばれる)。
@@ -898,7 +889,7 @@ class TocPanel(QWidget):
                 if page_str == "?":
                     page0: Optional[int] = None
                 else:
-                    page0 = self._resolve_page(page_str)
+                    page0 = self.resolve_page(page_str)
                     if page0 is None:
                         warnings.append(f"行{row_num}: ページ '{page_str}' が見つかりません（未設定でロード）")
                     elif self._doc is not None and page0 >= self._doc.page_count:
@@ -1010,7 +1001,7 @@ class TocPanel(QWidget):
                     return True
         return super().eventFilter(obj, event)
 
-    def _resolve_page(self, page_str: str) -> Optional[int]:
+    def resolve_page(self, page_str: str) -> Optional[int]:
         """ページ文字列を0-indexed物理ページ番号に解決する。解決不能な場合はNoneを返す。"""
         # パターン1: 論理ページラベルに一致するものを優先的に探す。
         # ローマ数字の前付けなどページラベルが混在するPDFでは、

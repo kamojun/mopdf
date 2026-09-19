@@ -19,6 +19,9 @@ PAGE_LAYOUT_MARGIN = 16
 class PageWidget(QLabel):
     """1ページ分の表示ウィジェット。テキスト選択モード時はドラッグで矩形選択できる。"""
 
+    _PREVIEW_INTERVAL_MS = 60  # ドラッグ中の認識テキスト抽出の間隔(FITZ_LOCKをレンダリングと取り合わないよう間引く)
+    _PREVIEW_MAX_CHARS = 60
+
     text_selected = Signal(str, int)  # (抽出テキスト, 0-indexed page)
     select_mode_requested = Signal()  # 右クリックメニューの「テキスト選択し目次追加」
     page_jump_dialog_requested = Signal()  # 右クリックメニューの「ページへ移動」
@@ -36,6 +39,21 @@ class PageWidget(QLabel):
         self._rubber_band = QRubberBand(QRubberBand.Shape.Rectangle, self)
         self._label_rect = QRect()
 
+        # ドラッグ中に認識しているテキストを選択枠の近くに表示する
+        self._preview = QLabel(self)
+        self._preview.setTextFormat(Qt.TextFormat.PlainText)
+        # 親のQSS(margin/背景)は子にも波及するので明示的に上書きする
+        self._preview.setStyleSheet(
+            "background: rgba(0, 0, 0, 180); color: white; margin: 0; border: none;"
+            " padding: 3px 6px; border-radius: 3px;"
+        )
+        self._preview.hide()
+        self._preview_rect = QRect()
+        self._preview_timer = QTimer(self)
+        self._preview_timer.setSingleShot(True)
+        self._preview_timer.setInterval(self._PREVIEW_INTERVAL_MS)
+        self._preview_timer.timeout.connect(self._update_preview)
+
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.setFrameShape(QFrame.Shape.Box)
         self.setLineWidth(1)
@@ -47,6 +65,40 @@ class PageWidget(QLabel):
     def set_select_mode(self, enabled: bool) -> None:
         self._select_mode = enabled
         self.setCursor(QCursor(Qt.CursorShape.CrossCursor if enabled else Qt.CursorShape.ArrowCursor))
+        if not enabled:
+            self._end_drag()
+
+    def _extract_text(self, rect: QRect) -> str:
+        return self._doc.get_text_in_rect(
+            self.page_index,
+            (rect.x(), rect.y(), rect.right(), rect.bottom()),
+            self._zoom,
+        )
+
+    def _end_drag(self) -> None:
+        self._rubber_band.hide()
+        self._origin = QPoint()
+        self._preview_timer.stop()
+        self._preview.hide()
+
+    def _update_preview(self) -> None:
+        rect = self._preview_rect
+        if self._origin.isNull() or rect.width() <= 4 or rect.height() <= 4:
+            self._preview.hide()
+            return
+        text = self._extract_text(rect).replace("\n", " ⏎ ")
+        if len(text) > self._PREVIEW_MAX_CHARS:
+            text = text[:self._PREVIEW_MAX_CHARS] + "…"
+        self._preview.setText(text or "（テキストなし）")
+        self._preview.adjustSize()
+        # 選択枠の下に置き、ページからはみ出すなら上に置く
+        x = max(0, min(rect.left(), self.width() - self._preview.width()))
+        y = rect.bottom() + 4
+        if y + self._preview.height() > self.height():
+            y = max(0, rect.top() - self._preview.height() - 4)
+        self._preview.move(x, y)
+        self._preview.show()
+        self._preview.raise_()
 
     def refresh_label(self) -> None:
         self.update()  # type: ignore[misc]
@@ -94,9 +146,10 @@ class PageWidget(QLabel):
 
     def mouseMoveEvent(self, event) -> None:
         if self._select_mode and not self._origin.isNull():
-            self._rubber_band.setGeometry(
-                QRect(self._origin, event.pos()).normalized()
-            )
+            self._preview_rect = QRect(self._origin, event.pos()).normalized()
+            self._rubber_band.setGeometry(self._preview_rect)
+            if not self._preview_timer.isActive():
+                self._preview_timer.start()
         elif not self._select_mode:
             self.setCursor(QCursor(
                 Qt.CursorShape.PointingHandCursor if self._label_rect.contains(event.pos())
@@ -109,15 +162,10 @@ class PageWidget(QLabel):
     def mouseReleaseEvent(self, event) -> None:
         if self._select_mode and not self._origin.isNull():
             rect = QRect(self._origin, event.pos()).normalized()
-            self._rubber_band.hide()
-            self._origin = QPoint()
+            self._end_drag()
 
             if rect.width() > 4 and rect.height() > 4:
-                text = self._doc.get_text_in_rect(
-                    self.page_index,
-                    (rect.x(), rect.y(), rect.right(), rect.bottom()),
-                    self._zoom,
-                )
+                text = self._extract_text(rect)
                 if text:
                     self.text_selected.emit(text, self.page_index)
         else:

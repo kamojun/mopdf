@@ -2,7 +2,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Optional
 from PySide6.QtCore import Qt, QSize, QSettings, QTimer
-from PySide6.QtGui import QAction, QDragEnterEvent, QDropEvent, QShortcut, QKeySequence, QCursor
+from PySide6.QtGui import QAction, QDragEnterEvent, QDropEvent, QShortcut, QKeySequence
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QSplitter, QFileDialog,
     QStatusBar, QLabel, QMessageBox, QMenu, QInputDialog,
@@ -14,6 +14,7 @@ from .pdf_viewer import PdfViewer
 from .toc_panel import TocPanel, INSERT_BELOW_SELECTED, INSERT_PAGE_ORDER
 from .page_label_panel import PageLabelPanel
 from .changes_dialog import ChangesDialog, paired_diff
+from .toc_entry_dialog import TocEntryDialog
 from .shortcuts_dialog import ShortcutsDialog
 
 
@@ -471,24 +472,18 @@ class MainWindow(QMainWindow):
         self._select_mode_active = False
         self._viewer.set_select_mode(False)
 
-        # 2つの挿入モードが同じ位置に落ち着くなら選ばせる意味がないので即挿入する
-        if not self._toc_panel.insert_modes_differ(page_index):
-            self._toc_panel.add_entry_with_title(text, page_index,
-                                                  insert_mode=INSERT_PAGE_ORDER)
+        # 選択テキストをタイトルに、飛び先ページを入力させて目次に追加する。
+        # 挿入位置は既定でページ番号順、チェック時のみ選択項目の下で、チェック状態は記憶する。
+        dialog = TocEntryDialog(
+            text, page_index, self._doc.get_page_label_for(page_index),
+            self._toc_panel, self._doc.page_count,
+            self._settings.value("textSelectInsertBelow", False, type=bool), self,
+        )
+        if dialog.exec() != QDialog.DialogCode.Accepted:
             return
-
-        menu = QMenu(self)
-        page_order_action = menu.addAction("ページ番号順の位置に挿入")
-        below_action = menu.addAction("選択されている項目の下に挿入")
-        chosen = menu.exec(QCursor.pos())
-        if chosen is below_action:
-            mode = INSERT_BELOW_SELECTED
-        elif chosen is page_order_action:
-            mode = INSERT_PAGE_ORDER
-        else:
-            return  # ポップアップをキャンセル → 追加しない
-
-        self._toc_panel.add_entry_with_title(text, page_index, insert_mode=mode)
+        self._settings.setValue("textSelectInsertBelow", dialog.insert_below())
+        mode = INSERT_BELOW_SELECTED if dialog.insert_below() else INSERT_PAGE_ORDER
+        self._toc_panel.add_entry_with_title(dialog.title(), dialog.page_index(), insert_mode=mode)
 
     # ------------------------------------------------------------------
     # ドラッグ&ドロップ

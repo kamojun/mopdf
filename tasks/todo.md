@@ -469,3 +469,33 @@
 
 - headless(offscreen)で `QMessageBox.question` を差し替えて検証: (1) 空の表でp.10追加 → ローマ提案、受諾で `r@1, D@10`、`page_labels_modified` は1回 (2) 手前に範囲があるp.15追加 → 提案なし (3) 断ると `D@5` のまま (4) そのスタイルをセル編集で `R` に → 英字提案、受諾で `A@1, R@5`、通知は1回
 - 実GUIでの操作・Undo・保存→再読み込みは未確認
+
+## GitHub Actions でのリリース自動ビルド
+
+`v*` タグの push で、GitHub Actions がビルド・署名・公証・staple・検証・zip作成を行い、**下書き** Release に添付する。中身は既存の `scripts/release_macos.sh` をそのまま呼ぶ。
+
+- 公証は App Store Connect API キー（Team キー、Developer ロール）。`notarytool store-credentials` で一時キーチェーンにプロファイル `mopdf-notary` として保存し、スクリプトの `--keychain-profile` 方式を流用する
+- Secrets は Environment `release` に置く（`v*` タグ限定＋手動承認）
+
+### 実装
+
+- [x] ~~アイコンをコミット~~ → 調べ直したら既にgit管理下だった（調査時の読み違い）。対応不要
+- [x] `mopdf.spec`: バージョンを環境変数 `MOPDF_VERSION` から読む（未設定なら 0.0.0）
+- [x] `release_macos.sh`: バージョン形式の検査と `MOPDF_VERSION` の export、任意の `MOPDF_NOTARY_KEYCHAIN`（notarytool に `--keychain` を付ける）
+- [x] `.github/workflows/release.yml` を新規作成（actions は SHA 固定、一時キーチェーン、draft Release、always で後片付け）
+  - 手元の証明書は中間CAが旧世代(G1)。書き出した .p12 には中間証明書が入らないので、Apple の G1/G2 中間証明書も一時キーチェーンに入れる
+- [x] README に自動リリースの手順と初回準備を追記
+- [x] README を利用者向けに絞り、ビルド・配布・自動リリースの手順は `docs/DEVELOPMENT.md` に移動（README からはリンクのみ）
+
+### ユーザー側の手作業
+
+- [ ] Developer ID Application 証明書＋秘密鍵を .p12 で書き出す
+- [ ] App Store Connect で Team API キー（Developer ロール）を発行
+- [ ] GitHub で Environment `release` を作成（Required reviewers、`v*` タグ限定）
+- [ ] Secrets 6つを登録
+
+### 検証
+
+- [x] 静的チェック: shellcheck / actionlint は手元に無いのでスキップ。`bash -n` とYAMLのパースはOK。バージョン形式の検査（`0.1` や引数なしで usage を出して終了）を確認。下書きReleaseのステップは `gh` を差し替えて手元で実行し、リリースノートが既存の書式どおり生成されることを確認
+- [ ] `MOPDF_VERSION` を渡したローカルビルドで Info.plist のバージョン確認（実行前に確認を取る）
+- [ ] 次のリリースタグで実際に動かし、下書き Release の zip が `spctl` で accepted になること

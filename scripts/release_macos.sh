@@ -14,18 +14,26 @@
 # 環境変数で上書きできるもの:
 #   MOPDF_CODESIGN_IDENTITY  署名に使う証明書名（未指定ならDeveloper ID Applicationを自動検出）
 #   MOPDF_NOTARY_PROFILE     notarytoolのプロファイル名（既定: mopdf-notary）
+#   MOPDF_NOTARY_KEYCHAIN    プロファイルを保存したキーチェーンのパス（既定: ログインキーチェーン）
+#                            GitHub Actions では一時キーチェーンを指定する（.github/workflows/release.yml）
 
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
 VERSION="${1:-}"
-if [ -z "$VERSION" ]; then
+if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
     echo "usage: $0 <version>   (例: $0 0.1.1)" >&2
     exit 1
 fi
+# mopdf.spec がこれを Info.plist のバージョンに使う
+export MOPDF_VERSION="$VERSION"
 
 NOTARY_PROFILE="${MOPDF_NOTARY_PROFILE:-mopdf-notary}"
+NOTARY_AUTH=(--keychain-profile "$NOTARY_PROFILE")
+if [ -n "${MOPDF_NOTARY_KEYCHAIN:-}" ]; then
+    NOTARY_AUTH+=(--keychain "$MOPDF_NOTARY_KEYCHAIN")
+fi
 ARCH="$(uname -m)"
 APP="dist/mopdf.app"
 ZIP="dist/mopdf-v${VERSION}-macos-${ARCH}.zip"
@@ -62,7 +70,7 @@ export MOPDF_CODESIGN_IDENTITY
 # ビルドに数分かかるので、認証切れならここで落としたい
 step "notarytoolの認証情報を確認 (プロファイル: $NOTARY_PROFILE)"
 # notarytool 1.1.2 の history に --limit は無い（付けると Unknown option で落ちる）
-if ! xcrun notarytool history --keychain-profile "$NOTARY_PROFILE" >/dev/null 2>&1; then
+if ! xcrun notarytool history "${NOTARY_AUTH[@]}" >/dev/null 2>&1; then
     cat >&2 <<MSG
 notarytoolのプロファイル "$NOTARY_PROFILE" が使えません。
 下記を実行して認証情報を保存してください（App用パスワードは appleid.apple.com で発行）:
@@ -101,7 +109,7 @@ rm -f "$UPLOAD_ZIP"
 ditto -c -k --sequesterRsrc --keepParent "$APP" "$UPLOAD_ZIP"
 
 set +e
-SUBMIT_OUT="$(xcrun notarytool submit "$UPLOAD_ZIP" --keychain-profile "$NOTARY_PROFILE" --wait 2>&1)"
+SUBMIT_OUT="$(xcrun notarytool submit "$UPLOAD_ZIP" "${NOTARY_AUTH[@]}" --wait 2>&1)"
 SUBMIT_RC=$?
 set -e
 echo "$SUBMIT_OUT"
@@ -111,7 +119,7 @@ if [ $SUBMIT_RC -ne 0 ] || ! grep -q "status: Accepted" <<<"$SUBMIT_OUT"; then
     echo "" >&2
     echo "公証に失敗しました。詳細ログ:" >&2
     if [ -n "$SUBMISSION_ID" ]; then
-        xcrun notarytool log "$SUBMISSION_ID" --keychain-profile "$NOTARY_PROFILE" >&2 || true
+        xcrun notarytool log "$SUBMISSION_ID" "${NOTARY_AUTH[@]}" >&2 || true
     fi
     exit 1
 fi

@@ -382,42 +382,9 @@ start_page,style,prefix,first_num
 
 すべてのショートカットは「ヘルプ→キーボードショートカット...」からも確認できます。
 
-## macOS向けスタンドアローンアプリのビルド
+## 開発者向け
 
-Python環境なしで起動できる `mopdf.app` をPyInstallerでビルドできます。
-
-```bash
-pip install -r requirements-dev.txt
-pyinstaller mopdf.spec
-open dist/mopdf.app
-```
-
-- `dist/mopdf.app` が生成されます。アイコンを更新する場合は `assets/icon.png` を差し替えて `python scripts/make_icon.py` を再実行してください（Pillowが必要です）。
-- 自分でビルドした `mopdf.app` はそのまま起動できます（隔離属性が付かないため、Gatekeeperの確認は出ません）。この手順ではad-hoc署名になります。
-
-### 配布用ビルド（署名・公証つき）
-
-Releasesで配布しているzipは、次のスクリプトで作っています。
-
-```bash
-./scripts/release_macos.sh 0.1.1
-```
-
-ビルド → 署名 → 公証（notarization）→ staple → Gatekeeper判定の確認 → 配布用zip作成までを一括で行います。実行には次の2つが必要です。
-
-- **Developer ID Application 証明書**（Apple Developer Programの加入が必要）。Xcode → Settings → Accounts → Manage Certificates… → ＋ → Developer ID Application で作成します。開発用の「Apple Development」証明書では配布できません
-- **notarytoolの認証情報**。[appleid.apple.com](https://appleid.apple.com/) でApp用パスワードを発行し、次のコマンドで保存します（`--password` を省略すると安全なプロンプトで入力できます）
-
-  ```bash
-  xcrun notarytool store-credentials "mopdf-notary" \
-    --apple-id "<Apple ID>" --team-id "<Team ID>"
-  ```
-
-`mopdf.spec` は環境変数 `MOPDF_CODESIGN_IDENTITY` が設定されているときだけ署名を行います。未設定なら従来どおりad-hoc署名なので、開発中の `pyinstaller mopdf.spec` の挙動は変わりません。署名時はPyInstallerが `--options=runtime`（Hardened Runtime）と `--timestamp` を自動で付与します。どちらも公証の必須要件です。
-
-Hardened RuntimeはCPython/Qtが必要とする動作を既定で禁止するため、`entitlements.plist` で例外を指定しています。
-
-なお配布用zipは `ditto -c -k --sequesterRsrc --keepParent` で固めます（`zip`コマンドはアプリバンドル内のシンボリックリンクを壊すことがあります）。**staple の後に固めること** — 公証チケットは `.app` に貼り付けられるため、staple前に作ったzipにはチケットが入りません。
+アプリのビルド、署名・公証つきの配布用ビルド、GitHub Actionsによる自動リリースの手順は [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) にまとめています。
 
 ## ライセンス
 

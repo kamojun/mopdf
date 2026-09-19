@@ -14,6 +14,10 @@ datas, binaries, hiddenimports = collect_all("fitz")
 CODESIGN_IDENTITY = os.environ.get("MOPDF_CODESIGN_IDENTITY") or None
 ENTITLEMENTS_FILE = "entitlements.plist" if CODESIGN_IDENTITY else None
 
+# アプリのバージョン。配布用ビルドでは scripts/release_macos.sh が引数から設定する
+# （CIではタグ名から）。開発中のビルドは 0.0.0 のままでよい。
+VERSION = os.environ.get("MOPDF_VERSION") or "0.0.0"
+
 a = Analysis(
     ["main.py"],
     pathex=[],
@@ -73,9 +77,9 @@ app = BUNDLE(
     name="mopdf.app",
     icon="assets/icon.icns",
     bundle_identifier="com.kamojun.mopdf",
-    version="0.1.1",
+    version=VERSION,
     info_plist={
-        "CFBundleShortVersionString": "0.1.1",
+        "CFBundleShortVersionString": VERSION,
         "NSHighResolutionCapable": True,
         "CFBundleDocumentTypes": [
             {

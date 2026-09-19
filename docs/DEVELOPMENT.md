@@ -62,7 +62,7 @@ git push origin v0.1.2
 2. **App Store Connect APIキーの発行**: [App Store Connect](https://appstoreconnect.apple.com/) →「ユーザとアクセス」→「統合」→「App Store Connect API」で**チームキー**をアクセス権「Developer」で作成します。`.p8` ファイルは一度しかダウンロードできません。Key ID と Issuer ID を控えておきます。
 3. **Environmentの作成**: GitHubのリポジトリ → Settings → Environments →「New environment」で `release` を作成し、次を設定します。
    - Required reviewers: 自分
-   - Deployment branches and tags: 「Selected branches and tags」でタグのルール `v*` を追加
+   - Deployment branches and tags: 「Selected branches and tags」→「Add deployment branch or tag rule」で、**Ref type を「Tag」に切り替えて** `v*` を追加（初期値の「Branch」のままだとブランチ名のルールになり、タグからの実行が "not allowed to deploy to release due to environment protection rules" で弾かれる）
 4. **Secretsの登録**: 作成した Environment `release` の「Environment secrets」に次の6つを登録します。
 
    | 名前 | 値 |

@@ -1,7 +1,7 @@
 from __future__ import annotations
 import csv
 from typing import Optional
-from PySide6.QtCore import Qt, Signal, QEvent
+from PySide6.QtCore import Qt, Signal, QEvent, QTimer
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QTableWidget, QTableWidgetItem,
     QLabel, QHeaderView, QPushButton, QSpinBox, QComboBox, QLineEdit,
@@ -74,7 +74,8 @@ class PageLabelDelegate(QStyledItemDelegate):
         col = index.column()
         if col == COL_START and isinstance(editor, QSpinBox):
             model.setData(index, editor.value() - 1, Qt.ItemDataRole.UserRole)
-            model.setData(index, str(editor.value()), Qt.ItemDataRole.DisplayRole)
+            # 数値で持つ（sortItemsが文字列比較で "10" < "9" にならないように）
+            model.setData(index, editor.value(), Qt.ItemDataRole.DisplayRole)
         elif col == COL_STYLE and isinstance(editor, QComboBox):
             code = editor.currentData()
             model.setData(index, code, Qt.ItemDataRole.UserRole)
@@ -208,8 +209,9 @@ class PageLabelPanel(QWidget):
         self._table.blockSignals(False)
 
     def _populate_row(self, row: int, r: PageLabelRange) -> None:
-        # 開始ページ（表示: 1-indexed, UserRole: 0-indexed）
-        start_item = QTableWidgetItem(str(r.start_page + 1))
+        # 開始ページ（表示: 1-indexed の数値, UserRole: 0-indexed）
+        start_item = QTableWidgetItem()
+        start_item.setData(Qt.ItemDataRole.DisplayRole, r.start_page + 1)
         start_item.setData(Qt.ItemDataRole.UserRole, r.start_page)
         start_item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable | Qt.ItemFlag.ItemIsEditable)
         self._table.setItem(row, COL_START, start_item)
@@ -277,6 +279,7 @@ class PageLabelPanel(QWidget):
         for row, r in enumerate(ranges):
             self._populate_row(row, r)
         self._table.blockSignals(False)
+        self._sort_rows()
         self.page_labels_modified.emit()
 
         if warnings:
@@ -386,7 +389,19 @@ class PageLabelPanel(QWidget):
         self._table.blockSignals(True)
         self._populate_row(row, PageLabelRange(start_page=start_page, style="D", prefix="", first_num=1))
         self._table.blockSignals(False)
+        self._table.selectRow(row)
+        self._sort_rows()
         self.page_labels_modified.emit()
+
+    def _sort_rows(self) -> None:
+        """表の行を開始ページ順に並べ直す（表示のみ）。アイテムを作り直さないので、
+        選択・カレント行は並べ替え後の位置についていく。"""
+        self._table.blockSignals(True)
+        self._table.sortItems(COL_START, Qt.SortOrder.AscendingOrder)
+        self._table.blockSignals(False)
+        current = self._table.currentItem()
+        if current is not None:
+            self._table.scrollToItem(current)
 
     def _delete_range(self) -> None:
         rows = sorted({idx.row() for idx in self._table.selectedIndexes()}, reverse=True)
@@ -421,4 +436,8 @@ class PageLabelPanel(QWidget):
             self.page_jump_requested.emit(page)
 
     def _on_item_changed(self, item: QTableWidgetItem) -> None:
+        if item.column() == COL_START:
+            # DelegateのsetModelDataがsetDataを2回呼ぶ途中で行が動くと、
+            # 2回目が別の行に書き込まれるため、編集確定後まで遅らせる
+            QTimer.singleShot(0, self._sort_rows)
         self.page_labels_modified.emit()

@@ -172,7 +172,9 @@ class PageWidget(QLabel):
             super().mouseReleaseEvent(event)
 
     def contextMenuEvent(self, event) -> None:
-        menu = QMenu(self)
+        # 親を持たせると PageWidget/PdfViewer のセレクタなしQSS(背景白など)が波及し、
+        # ハイライト項目が白地に白文字になって読めなくなるため親なしで作る
+        menu = QMenu()
         select_action = menu.addAction("テキスト選択し目次追加")
         menu.addSeparator()
         jump_action = menu.addAction("ページへ移動")
